@@ -77,6 +77,7 @@ export const EditTool = Tool.define(
           }
 
           const instance = yield* InstanceState.context
+          const diffRoot = instance.worktree === "/" ? instance.directory : instance.worktree
           const filePath = path.isAbsolute(params.filePath)
             ? params.filePath
             : path.join(instance.directory, params.filePath)
@@ -97,7 +98,7 @@ export const EditTool = Tool.define(
                 diff = trimDiff(createTwoFilesPatch(filePath, filePath, contentOld, contentNew))
                 yield* ctx.ask({
                   permission: "edit",
-                  patterns: [path.relative(instance.worktree, filePath)],
+                  patterns: [path.relative(diffRoot, filePath).replaceAll("\\", "/")],
                   always: ["*"],
                   metadata: {
                     filepath: filePath,
@@ -140,7 +141,7 @@ export const EditTool = Tool.define(
               )
               yield* ctx.ask({
                 permission: "edit",
-                patterns: [path.relative(instance.worktree, filePath)],
+                patterns: [path.relative(diffRoot, filePath).replaceAll("\\", "/")],
                 always: ["*"],
                 metadata: {
                   filepath: filePath,
@@ -175,7 +176,7 @@ export const EditTool = Tool.define(
             if (change.removed) deletions += change.count || 0
           }
           const filediff: Snapshot.FileDiff = {
-            file: filePath,
+            file: path.relative(diffRoot, filePath).replaceAll("\\", "/"),
             patch: diff,
             additions,
             deletions,
@@ -202,7 +203,7 @@ export const EditTool = Tool.define(
               diff,
               filediff,
             },
-            title: `${path.relative(instance.worktree, filePath)}`,
+            title: `${path.relative(diffRoot, filePath)}`,
             output,
           }
         }),

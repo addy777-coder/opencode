@@ -446,7 +446,7 @@ export type Part =
   | RetryPart
   | CompactionPart
 
-// Zod discriminated union kept for the legacy Hono OpenAPI path.
+// Zod discriminated union kept for OpenAPI compatibility.
 const AssistantErrorZod = z.discriminatedUnion("name", [
   AuthError.Schema,
   NamedError.Unknown.Schema,

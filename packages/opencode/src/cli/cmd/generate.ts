@@ -2,8 +2,7 @@ import { Server } from "../../server/server"
 import type { CommandModule } from "yargs"
 
 type Args = {
-  httpapi: boolean
-  hono: boolean
+  httpapi?: boolean
 }
 
 export const GenerateCommand = {
@@ -15,19 +14,17 @@ export const GenerateCommand = {
         default: false,
         description:
           "Generate OpenAPI from the Effect HttpApi contract (default; flag retained for backwards compatibility)",
-      })
-      .option("hono", {
-        type: "boolean",
-        default: false,
-        description: "Generate OpenAPI from the legacy Hono backend (parity-diff only; will be removed)",
       }),
-  handler: async (args) => {
-    const specs = args.hono ? await Server.openapiHono() : await Server.openapi()
+  handler: async () => {
+    const specs = await Server.openapi()
     for (const item of Object.values(specs.paths)) {
       for (const method of ["get", "post", "put", "delete", "patch"] as const) {
         const operation = item[method]
         if (!operation?.operationId) continue
-        operation["x-codeSamples"] = [
+        const operationWithSamples = operation as typeof operation & {
+          "x-codeSamples"?: Array<{ lang: string; source: string }>
+        }
+        operationWithSamples["x-codeSamples"] = [
           {
             lang: "js",
             source: [

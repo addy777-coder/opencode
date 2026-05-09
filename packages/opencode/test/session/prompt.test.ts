@@ -374,6 +374,123 @@ it.live("loop calls LLM and returns assistant message", () =>
   ),
 )
 
+it.live("loop uses compacted active context instead of retained tail token usage", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm, dir }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Compacted",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const now = Date.now()
+      const oldUser = yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        time: { created: now },
+      })
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: oldUser.id,
+        sessionID: chat.id,
+        type: "text",
+        text: "before compaction",
+      })
+      const retainedTail = yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "assistant",
+        parentID: oldUser.id,
+        sessionID: chat.id,
+        mode: "build",
+        agent: "build",
+        cost: 0,
+        path: { cwd: dir, root: dir },
+        tokens: { input: 95_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: ref.modelID,
+        providerID: ref.providerID,
+        time: { created: now + 1 },
+        finish: "stop",
+      })
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: retainedTail.id,
+        sessionID: chat.id,
+        type: "text",
+        text: "small retained tail",
+      })
+      const compaction = yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        time: { created: now + 2 },
+      })
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: compaction.id,
+        sessionID: chat.id,
+        type: "compaction",
+        auto: true,
+        tail_start_id: retainedTail.id,
+      })
+      const summary = yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "assistant",
+        parentID: compaction.id,
+        sessionID: chat.id,
+        mode: "compaction",
+        agent: "compaction",
+        cost: 0,
+        path: { cwd: dir, root: dir },
+        tokens: { input: 100, output: 10, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: ref.modelID,
+        providerID: ref.providerID,
+        summary: true,
+        time: { created: now + 3 },
+        finish: "stop",
+      })
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: summary.id,
+        sessionID: chat.id,
+        type: "text",
+        text: "compact summary",
+      })
+      const resume = yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        time: { created: now + 4 },
+      })
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: resume.id,
+        sessionID: chat.id,
+        type: "text",
+        synthetic: true,
+        metadata: { compaction_continue: true },
+        text: "Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed.",
+      })
+
+      yield* llm.text("resumed", { usage: { input: 100, output: 5 } })
+      const result = yield* prompt.loop({ sessionID: chat.id })
+      const all = yield* sessions.messages({ sessionID: chat.id })
+      const compactions = all.flatMap((msg) => msg.parts).filter((part) => part.type === "compaction")
+
+      expect(result.parts.some((part) => part.type === "text" && part.text === "resumed")).toBe(true)
+      expect(compactions).toHaveLength(1)
+      expect(yield* llm.calls).toBe(1)
+    }),
+    { git: true, config: providerCfg },
+  ),
+)
+
 it.live("prompt emits v2 prompted and synthetic events", () =>
   provideTmpdirServer(
     Effect.fnUntraced(function* () {

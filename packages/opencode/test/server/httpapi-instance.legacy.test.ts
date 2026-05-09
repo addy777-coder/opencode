@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { Flag } from "@opencode-ai/core/flag/flag"
 import { Server } from "../../src/server/server"
 import { InstancePaths } from "../../src/server/routes/instance/httpapi/groups/instance"
 import * as Log from "@opencode-ai/core/util/log"
@@ -9,10 +8,7 @@ import { waitGlobalBusEventPromise } from "./global-bus"
 
 void Log.init({ print: false })
 
-const original = Flag.OPENCODE_EXPERIMENTAL_HTTPAPI
-
 function app() {
-  Flag.OPENCODE_EXPERIMENTAL_HTTPAPI = true
   return Server.Default().app
 }
 
@@ -24,13 +20,12 @@ async function waitDisposed(directory: string) {
 }
 
 afterEach(async () => {
-  Flag.OPENCODE_EXPERIMENTAL_HTTPAPI = original
   await disposeAllInstances()
   await resetDatabase()
 })
 
 describe("instance HttpApi", () => {
-  test("serves catalog read endpoints through Hono bridge", async () => {
+  test("serves catalog read endpoints through HttpApi routes", async () => {
     await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
 
     const [commands, agents, skills, lsp, formatter] = await Promise.all([
@@ -57,7 +52,7 @@ describe("instance HttpApi", () => {
     expect(await formatter.json()).toEqual([])
   })
 
-  test("serves project git init through Hono bridge", async () => {
+  test("serves project git init through HttpApi routes", async () => {
     await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
     const disposed = waitDisposed(tmp.path)
 
@@ -75,7 +70,7 @@ describe("instance HttpApi", () => {
     expect(await current.json()).toMatchObject({ vcs: "git", worktree: tmp.path })
   })
 
-  test("serves project update through Hono bridge", async () => {
+  test("serves project update through HttpApi routes", async () => {
     await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
 
     const current = await app().request("/project/current", { headers: { "x-opencode-directory": tmp.path } })
@@ -102,7 +97,7 @@ describe("instance HttpApi", () => {
     )
   })
 
-  test("serves instance dispose through Hono bridge", async () => {
+  test("serves instance dispose through HttpApi routes", async () => {
     await using tmp = await tmpdir()
 
     const disposed = waitGlobalBusEventPromise({

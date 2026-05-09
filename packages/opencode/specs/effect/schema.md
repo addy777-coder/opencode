@@ -305,9 +305,9 @@ emitted JSON Schema must stay byte-identical.
 
 ### HTTP route boundaries
 
-Every file in `src/server/routes/` uses hono-openapi with zod validators for
-route inputs/outputs. Migrating these individually is the last step; most
-will switch to `.zod` derived from the Schema-migrated domain types above,
+HTTP route inputs and outputs should be derived from Effect Schema wherever
+possible. Any remaining `.zod` surface should be generated from the
+Schema-migrated domain types above,
 which means touching them is largely mechanical once the domain side is
 done.
 

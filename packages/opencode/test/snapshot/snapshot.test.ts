@@ -46,6 +46,30 @@ function run<A>(dir: string, body: (snapshot: Snapshot.Interface) => Effect.Effe
   )
 }
 
+test("tracks changes in non-git projects", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Filesystem.write(`${dir}/a.txt`, "before\n")
+    },
+  })
+
+  const before = await run(tmp.path, (snapshot) => snapshot.track())
+  expect(before).toBeTruthy()
+
+  await Filesystem.write(`${tmp.path}/a.txt`, "after\n")
+  await Filesystem.write(`${tmp.path}/new.txt`, "created\n")
+
+  const after = await run(tmp.path, (snapshot) => snapshot.track())
+  expect(after).toBeTruthy()
+
+  const patch = await run(tmp.path, (snapshot) => snapshot.patch(before!))
+  expect(patch.files).toContain(fwd(tmp.path, "a.txt"))
+  expect(patch.files).toContain(fwd(tmp.path, "new.txt"))
+
+  const diffs = await run(tmp.path, (snapshot) => snapshot.diffFull(before!, after!))
+  expect(diffs.map((item) => item.file).sort()).toEqual(["a.txt", "new.txt"])
+})
+
 test("tracks deleted files correctly", async () => {
   await using tmp = await bootstrap()
   await WithInstance.provide({

@@ -1,8 +1,8 @@
 import { Context, Effect, Layer } from "effect"
+import { InstallationChannel, InstallationVersion } from "@opencode-ai/core/installation/version"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { FetchHttpClient, HttpClient, HttpMiddleware, HttpRouter, HttpServer } from "effect/unstable/http"
+import { FetchHttpClient, HttpMiddleware, HttpRouter, HttpServer } from "effect/unstable/http"
 import * as Socket from "effect/unstable/socket/Socket"
-import { AppFileSystem } from "@opencode-ai/core/filesystem"
 import { Account } from "@/account/account"
 import { Agent } from "@/agent/agent"
 import { Auth } from "@/auth"
@@ -46,7 +46,6 @@ import { Vcs } from "@/project/vcs"
 import { Worktree } from "@/worktree"
 import { Workspace } from "@/control-plane/workspace"
 import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@/server/cors"
-import { serveUIEffect } from "@/server/shared/ui"
 import { ServerAuth } from "@/server/auth"
 import { InstanceHttpApi, RootHttpApi } from "./api"
 import { authorizationLayer, authorizationRouterMiddleware } from "./middleware/authorization"
@@ -72,16 +71,21 @@ import { instanceContextLayer, instanceRouterMiddleware } from "./middleware/ins
 import { workspaceRouterMiddleware, workspaceRoutingLayer } from "./middleware/workspace-routing"
 import { disposeMiddleware } from "./lifecycle"
 import { memoMap } from "@opencode-ai/core/effect/memo-map"
-import * as ServerBackend from "@/server/backend"
 import { errorLayer } from "./middleware/error"
 
 export const context = Context.makeUnsafe<unknown>(new Map())
 
+const backendAttributes = {
+  "opencode.server.backend": "effect-httpapi",
+  "opencode.server.backend.reason": "stable",
+  "opencode.installation.channel": InstallationChannel,
+  "opencode.installation.version": InstallationVersion,
+}
+
 const runtime = HttpRouter.middleware()(
   Effect.succeed((effect) =>
     Effect.gen(function* () {
-      const selected = ServerBackend.select()
-      yield* Effect.annotateCurrentSpan(ServerBackend.attributes(ServerBackend.force(selected, "effect-httpapi")))
+      yield* Effect.annotateCurrentSpan(backendAttributes)
       return yield* effect
     }),
   ),
@@ -134,16 +138,8 @@ const instanceRoutes = Layer.mergeAll(rawInstanceRoutes, instanceApiRoutes).pipe
   ]),
 )
 
-const uiRoute = HttpRouter.use((router) =>
-  Effect.gen(function* () {
-    const fs = yield* AppFileSystem.Service
-    const client = yield* HttpClient.HttpClient
-    yield* router.add("*", "/*", (request) => serveUIEffect(request, { fs, client }))
-  }),
-).pipe(Layer.provide(authorizationRouterMiddleware.layer.pipe(Layer.provide(ServerAuth.Config.defaultLayer))))
-
 export function createRoutes(corsOptions?: CorsOptions) {
-  return Layer.mergeAll(rootApiRoutes, eventApiRoutes, instanceRoutes, uiRoute).pipe(
+  return Layer.mergeAll(rootApiRoutes, eventApiRoutes, instanceRoutes).pipe(
     Layer.provide([
       errorLayer,
       cors(corsOptions),
@@ -187,7 +183,6 @@ export function createRoutes(corsOptions?: CorsOptions) {
       Workspace.defaultLayer,
       Worktree.appLayer,
       Bus.layer,
-      AppFileSystem.defaultLayer,
       FetchHttpClient.layer,
       HttpServer.layerServices,
     ]),

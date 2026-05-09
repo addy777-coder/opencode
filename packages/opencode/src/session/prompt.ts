@@ -14,6 +14,7 @@ import type { JSONSchema7 } from "@ai-sdk/provider"
 import { SessionCompaction } from "./compaction"
 import { Bus } from "../bus"
 import { ProviderTransform } from "@/provider/transform"
+import { usable } from "./overflow"
 import { SystemPrompt } from "./system"
 import { Instruction } from "./instruction"
 import { Plugin } from "../plugin"
@@ -61,6 +62,7 @@ import * as DateTime from "effect/DateTime"
 import { eq } from "@/storage/db"
 import * as Database from "@/storage/db"
 import { SessionTable } from "./session.sql"
+import { Token } from "@/util/token"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -118,6 +120,40 @@ export const layer = Layer.effect(
     const llm = yield* LLM.Service
     const runner = Effect.fn("SessionPrompt.runner")(function* () {
       return yield* EffectBridge.make()
+    })
+    const latestCompletedCompaction = (messages: MessageV2.WithParts[]) => {
+      const completed = new Set<MessageID>()
+      for (const message of messages) {
+        if (message.info.role !== "assistant") continue
+        if (!message.info.summary || !message.info.finish || message.info.error) continue
+        completed.add(message.info.parentID)
+      }
+
+      let latest: MessageV2.User | undefined
+      for (const message of messages) {
+        if (message.info.role !== "user") continue
+        if (!completed.has(message.info.id)) continue
+        if (!message.parts.some((part) => part.type === "compaction")) continue
+        if (
+          !latest ||
+          message.info.time.created > latest.time.created ||
+          (message.info.time.created === latest.time.created && message.info.id > latest.id)
+        ) {
+          latest = message.info
+        }
+      }
+      return latest
+    }
+    const activeContextOverflow = Effect.fn("SessionPrompt.activeContextOverflow")(function* (input: {
+      messages: MessageV2.WithParts[]
+      model: Provider.Model
+    }) {
+      const cfg = yield* config.get()
+      if (cfg.compaction?.auto === false) return false
+      if (input.model.limit.context === 0) return false
+      const modelMessages = yield* MessageV2.toModelMessagesEffect(input.messages, input.model)
+      const count = Token.estimate(JSON.stringify(modelMessages))
+      return count >= usable({ cfg, model: input.model })
     })
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
@@ -208,7 +244,14 @@ export const layer = Layer.effect(
           model: mdl,
           sessionID: input.session.id,
           retries: 2,
-          messages: [{ role: "user", content: "Generate a title for this conversation:\n" }, ...msgs],
+          messages: [
+            {
+              role: "user",
+              content:
+                "Generate a concise Codex-style title for this conversation. Name the user's intent, not the raw first message. Use the same language as the user. For Chinese, prefer 2-8 characters such as 打招呼 or 调整会话命名. For a pure greeting, return 打招呼. Return only the title, with no quotes, punctuation, or explanation.\n",
+            },
+            ...msgs,
+          ],
         })
         .pipe(
           Stream.filter((e): e is Extract<LLM.Event, { type: "text-delta" }> => e.type === "text-delta"),
@@ -1476,11 +1519,20 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             continue
           }
 
-          if (
+          const latestCompaction = latestCompletedCompaction(msgs)
+          const lastFinishedIsRetainedTail =
+            lastFinished &&
+            latestCompaction !== undefined &&
+            (lastFinished.time.created < latestCompaction.time.created ||
+              (lastFinished.time.created === latestCompaction.time.created && lastFinished.id < latestCompaction.id))
+          const shouldCompact =
             lastFinished &&
             lastFinished.summary !== true &&
-            (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
-          ) {
+            (lastFinishedIsRetainedTail
+              ? yield* activeContextOverflow({ messages: msgs, model })
+              : yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
+
+          if (shouldCompact) {
             yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
             continue
           }

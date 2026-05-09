@@ -576,11 +576,11 @@ export const layer = Layer.effect(
 
       const cfg = yield* cfgSvc.get()
       const config = cfg.mcp ?? {}
-      const result: Record<string, Status> = {}
+      const result: Record<string, Status> = { ...s.status }
 
       for (const [key, mcp] of Object.entries(config)) {
         if (!isMcpConfigured(mcp)) continue
-        result[key] = s.status[key] ?? { status: "disabled" }
+        result[key] = result[key] ?? { status: "disabled" }
       }
 
       return result

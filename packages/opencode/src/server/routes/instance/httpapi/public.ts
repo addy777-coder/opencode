@@ -127,8 +127,8 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
       const operation = item[method]
       if (!operation) continue
       if (operation.requestBody) {
-        // Hono's generated OpenAPI never marked request bodies as required. Keep
-        // that SDK surface stable during the HttpApi migration.
+        // The previous SDK OpenAPI contract never marked request bodies as
+        // required. Keep that SDK surface stable.
         delete operation.requestBody.required
         const body = operation.requestBody.content?.["application/json"]
         if (body?.schema) body.schema = stripOptionalNull(structuredClone(body.schema))
@@ -162,8 +162,8 @@ function matchLegacyOpenApi(input: Record<string, unknown>) {
           if (content.schema) content.schema = stripOptionalNull(structuredClone(content.schema))
         }
       }
-      // Hono applied auth as runtime middleware outside OpenAPI metadata, so the
-      // legacy SDK did not expose auth schemes or generated 401 error unions.
+      // Auth is enforced at runtime, so the SDK contract does not expose auth
+      // schemes or generated 401 error unions.
       delete operation.security
       delete operation.responses?.["401"]
       normalizeLegacyErrorResponses(operation)

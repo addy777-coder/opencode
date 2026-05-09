@@ -90,7 +90,7 @@ const LogLevelRef = Schema.Literals(["DEBUG", "INFO", "WARN", "ERROR"]).annotate
 })
 
 // The Effect Schema is the canonical source of truth. The `.zod` compatibility
-// surface is derived so existing Hono validators keep working without a parallel
+// surface is derived so existing Zod consumers keep working without a parallel
 // Zod definition.
 //
 // The walker emits `z.object({...})` which is non-strict by default. Config

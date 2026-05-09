@@ -3,7 +3,7 @@ import * as path from "path"
 import { Effect } from "effect"
 import * as Tool from "./tool"
 import { LSP } from "@/lsp/lsp"
-import { createTwoFilesPatch } from "diff"
+import { createTwoFilesPatch, diffLines } from "diff"
 import DESCRIPTION from "./write.txt"
 import { Bus } from "../bus"
 import { File } from "../file"
@@ -14,6 +14,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { trimDiff } from "./edit"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import * as Bom from "@/util/bom"
+import { Snapshot } from "@/snapshot"
 
 const MAX_PROJECT_DIAGNOSTICS_FILES = 5
 
@@ -38,6 +39,7 @@ export const WriteTool = Tool.define(
       execute: (params: { content: string; filePath: string }, ctx: Tool.Context) =>
         Effect.gen(function* () {
           const instance = yield* InstanceState.context
+          const diffRoot = instance.worktree === "/" ? instance.directory : instance.worktree
           const filepath = path.isAbsolute(params.filePath)
             ? params.filePath
             : path.join(instance.directory, params.filePath)
@@ -51,13 +53,28 @@ export const WriteTool = Tool.define(
           const contentNew = next.text
 
           const diff = trimDiff(createTwoFilesPatch(filepath, filepath, contentOld, contentNew))
+          let additions = 0
+          let deletions = 0
+          for (const change of diffLines(contentOld, contentNew)) {
+            if (change.added) additions += change.count || 0
+            if (change.removed) deletions += change.count || 0
+          }
+          const filediff: Snapshot.FileDiff = {
+            file: path.relative(diffRoot, filepath).replaceAll("\\", "/"),
+            patch: diff,
+            additions,
+            deletions,
+            status: exists ? "modified" : "added",
+          }
+
           yield* ctx.ask({
             permission: "edit",
-            patterns: [path.relative(instance.worktree, filepath)],
+            patterns: [path.relative(diffRoot, filepath).replaceAll("\\", "/")],
             always: ["*"],
             metadata: {
               filepath,
               diff,
+              filediff,
             },
           })
 
@@ -90,11 +107,13 @@ export const WriteTool = Tool.define(
           }
 
           return {
-            title: path.relative(instance.worktree, filepath),
+            title: path.relative(diffRoot, filepath),
             metadata: {
               diagnostics,
               filepath,
               exists: exists,
+              diff,
+              filediff,
             },
             output,
           }

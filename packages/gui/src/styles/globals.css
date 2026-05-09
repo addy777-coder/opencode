@@ -1,0 +1,479 @@
+@import "tailwindcss";
+
+/* -------------------------------------------------------------------------- */
+/* Design tokens                                                              */
+/*                                                                            */
+/* Runtime themes (light/dark/system + accent) are injected as inline styles  */
+/* on the root via themeVars() in app.tsx; the values below are sane fallback */
+/* defaults so children can rely on the variables before themeVars hydrates,  */
+/* and so isolated previews / Storybook-style screens still render correctly. */
+/* -------------------------------------------------------------------------- */
+:root {
+  color-scheme: dark;
+
+  /* surfaces */
+  --app-bg: #0f1115;
+  --app-panel: #16181d;
+  --app-panel-2: #1b1d22;
+  --app-chrome: #14161a;
+  --app-input: #1d1f24;
+  --app-composer: #1a1c21;
+  --app-inspector: #131519;
+
+  /* text */
+  --app-text: #f4f4f5;
+  --app-muted: rgba(244, 244, 245, 0.62);
+  --app-subtle: rgba(244, 244, 245, 0.42);
+
+  /* lines & states */
+  --app-border: rgba(255, 255, 255, 0.08);
+  --app-divider: rgba(255, 255, 255, 0.06);
+  --app-hover: rgba(255, 255, 255, 0.05);
+  --app-hover-strong: rgba(255, 255, 255, 0.10);
+  --app-selected: rgba(255, 255, 255, 0.08);
+
+  /* accent */
+  --app-accent: #6aa9ff;
+  --app-accent-soft: color-mix(in srgb, #6aa9ff 18%, transparent);
+  --app-accent-contrast: #0b0d12;
+
+  /* status */
+  --app-success: #34d399;
+  --app-warning: #f59e0b;
+  --app-danger: #ef4444;
+  --app-danger-soft: rgba(239, 68, 68, 0.14);
+
+  /* typography */
+  --app-ui-font:
+    "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", "SF Pro Text",
+    "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC",
+    "Source Han Sans SC", ui-sans-serif, system-ui, sans-serif;
+  --app-code-font:
+    "Cascadia Code", "Cascadia Mono", "JetBrains Mono", "Maple Mono NF CN",
+    "Sarasa Mono SC", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    "Microsoft YaHei UI", monospace;
+  --app-font-size: 14px;
+  --app-prose-font-size: 14px;
+  --app-code-font-size: 12.5px;
+
+  font-family: var(--app-ui-font);
+  background: var(--app-bg);
+  color: var(--app-text);
+  font-synthesis: none;
+  font-kerning: normal;
+  font-optical-sizing: auto;
+  letter-spacing: 0;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  font-weight: 400;
+  font-size: var(--app-font-size);
+  background: var(--app-bg);
+  color: var(--app-text);
+}
+
+/* Wrapped in :where() so specificity is 0 and Tailwind utility classes
+   like text-[var(--app-text)] always win. Without this, `color: inherit`
+   on form elements overrides utilities and tints text the wrong color
+   when sitting on top of accent backgrounds. */
+:where(button, textarea, input, select) {
+  font: inherit;
+}
+
+::selection {
+  background: var(--app-accent-soft);
+  color: var(--app-text);
+}
+
+:where(:focus) {
+  outline: none;
+}
+
+:where(:focus-visible) {
+  outline: 2px solid var(--app-accent);
+  outline-offset: 1px;
+}
+
+/* Inputs and textareas surrender focus rendering to their parent: the
+   composer uses focus-within, settings inputs colour their own border.
+   Without this opt-out, the global accent ring stacks on top of those
+   custom borders and produces an ugly double frame. */
+:where(input, textarea, select):focus,
+:where(input, textarea, select):focus-visible {
+  outline: none;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Scrollbars                                                                 */
+/* -------------------------------------------------------------------------- */
+::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--app-text) 18%, transparent);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--app-text) 32%, transparent);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--app-text) 18%, transparent) transparent;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Element resets                                                             */
+/* -------------------------------------------------------------------------- */
+input::placeholder,
+textarea::placeholder {
+  color: var(--app-muted);
+  opacity: 1;
+}
+
+kbd {
+  font-family: var(--app-code-font);
+  font-size: 0.78em;
+  line-height: 1;
+  padding: 0.1em 0.45em;
+  border-radius: 4px;
+  background: var(--app-hover-strong);
+  color: var(--app-text);
+}
+
+/* Hide the default focus ring on draggable window chrome */
+[data-tauri-drag-region]:focus,
+[data-tauri-drag-region]:focus-visible {
+  outline: none;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Markdown prose                                                             */
+/*                                                                            */
+/* Applied to assistant messages rendered through <MessageMarkdown />.        */
+/* The markup is produced by marked + marked-shiki and injected via           */
+/* dangerouslySetInnerHTML, so we can't use Tailwind utility classes per      */
+/* element — these styles target the raw HTML inside `.md-prose`.             */
+/* -------------------------------------------------------------------------- */
+.md-prose {
+  color: var(--app-text);
+  font-size: var(--app-prose-font-size);
+  line-height: 1.68;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.md-prose > * + * {
+  margin-top: 0.85rem;
+}
+
+.md-prose p {
+  margin: 0;
+}
+
+.md-prose strong {
+  font-weight: 600;
+  color: var(--app-text);
+}
+
+.md-prose em {
+  font-style: italic;
+}
+
+.md-prose del {
+  color: var(--app-muted);
+}
+
+.md-prose h1,
+.md-prose h2,
+.md-prose h3,
+.md-prose h4,
+.md-prose h5,
+.md-prose h6 {
+  color: var(--app-text);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.md-prose h1 {
+  font-size: calc(var(--app-prose-font-size) + 6px);
+  margin-top: 1.6rem;
+  margin-bottom: 0.6rem;
+}
+.md-prose h2 {
+  font-size: calc(var(--app-prose-font-size) + 3px);
+  margin-top: 1.4rem;
+  margin-bottom: 0.5rem;
+}
+.md-prose h3 {
+  font-size: calc(var(--app-prose-font-size) + 1px);
+  margin-top: 1.2rem;
+  margin-bottom: 0.4rem;
+}
+.md-prose h4 {
+  font-size: var(--app-prose-font-size);
+  margin-top: 1rem;
+  margin-bottom: 0.3rem;
+}
+.md-prose h5,
+.md-prose h6 {
+  font-size: calc(var(--app-prose-font-size) - 1px);
+  margin-top: 0.8rem;
+  margin-bottom: 0.3rem;
+}
+.md-prose > h1:first-child,
+.md-prose > h2:first-child,
+.md-prose > h3:first-child,
+.md-prose > h4:first-child {
+  margin-top: 0;
+}
+
+.md-prose ul,
+.md-prose ol {
+  padding-left: 1.5rem;
+  margin: 0;
+}
+
+.md-prose ul {
+  list-style: disc;
+}
+
+.md-prose ol {
+  list-style: decimal;
+}
+
+.md-prose li {
+  margin: 0.2rem 0;
+}
+
+.md-prose li::marker {
+  color: var(--app-muted);
+}
+
+.md-prose li > p {
+  margin: 0;
+}
+
+.md-prose li > ul,
+.md-prose li > ol {
+  margin-top: 0.25rem;
+}
+
+.md-prose blockquote {
+  border-left: 3px solid var(--app-border);
+  padding: 0.1rem 0 0.1rem 1rem;
+  color: var(--app-muted);
+  margin: 0;
+}
+
+.md-prose blockquote > * + * {
+  margin-top: 0.5rem;
+}
+
+.md-prose hr {
+  border: none;
+  border-top: 1px solid var(--app-divider);
+  margin: 1.5rem 0;
+}
+
+.md-prose a {
+  color: var(--app-accent);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.md-prose a:hover {
+  opacity: 0.85;
+}
+
+.md-prose a.md-local-file-link {
+  cursor: pointer;
+}
+
+.md-prose a.md-browser-link {
+  cursor: pointer;
+}
+
+.md-prose a.md-local-file-link > code {
+  color: var(--app-accent);
+  border-color: color-mix(in srgb, var(--app-accent) 45%, var(--app-divider));
+  cursor: pointer;
+}
+
+.md-prose a.md-local-file-link:hover > code {
+  background: var(--app-hover);
+}
+
+/* Inline code (not inside <pre>) */
+.md-prose :not(pre) > code {
+  font-family: var(--app-code-font);
+  font-size: 0.86em;
+  font-variant-ligatures: none;
+  padding: 0.12em 0.4em;
+  border-radius: 5px;
+  background: var(--app-code-bg);
+  border: 1px solid var(--app-divider);
+  color: var(--app-text);
+  white-space: break-spaces;
+}
+
+.md-prose table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92em;
+  margin: 0;
+  display: block;
+  overflow-x: auto;
+}
+
+.md-prose thead {
+  background: var(--app-hover);
+}
+
+.md-prose th,
+.md-prose td {
+  border: 1px solid var(--app-divider);
+  padding: 0.45rem 0.7rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.md-prose th {
+  font-weight: 600;
+}
+
+.md-prose img {
+  max-width: 100%;
+  border-radius: 8px;
+}
+
+.md-prose input[type="checkbox"] {
+  margin-right: 0.4rem;
+  vertical-align: middle;
+}
+
+/* === Code block (pre) === */
+.md-prose pre,
+.md-prose .md-code-block {
+  position: relative;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--app-divider);
+  border-radius: 12px;
+  background: var(--app-code-bg);
+  overflow: hidden;
+}
+
+.md-prose .md-code-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.4rem 0.65rem 0.4rem 0.85rem;
+  border-bottom: 1px solid var(--app-divider);
+  background: color-mix(in srgb, var(--app-text) 4%, transparent);
+  font-size: 11px;
+  color: var(--app-muted);
+  user-select: none;
+}
+
+.md-prose .md-code-lang {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  font-family: var(--app-code-font);
+  font-size: 10.5px;
+}
+
+.md-prose .md-code-copy {
+  border: none;
+  background: transparent;
+  color: var(--app-muted);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 0.2rem 0.55rem;
+  border-radius: 5px;
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    background-color 0.15s;
+}
+
+.md-prose .md-code-copy:hover {
+  color: var(--app-text);
+  background: var(--app-hover);
+}
+
+.md-prose .md-code-copy[data-copied="1"] {
+  color: var(--app-success);
+}
+
+/* shiki output — wipe its inline bg, let the toolbar/container provide it */
+.md-prose pre.shiki,
+.md-prose .md-code-block .shiki {
+  display: block;
+  padding: 0.85rem 1rem;
+  font-family: var(--app-code-font);
+  font-size: var(--app-code-font-size);
+  line-height: 1.6;
+  font-variant-ligatures: contextual common-ligatures;
+  overflow-x: auto;
+  background: transparent !important;
+  border-radius: 0;
+}
+
+.md-prose pre code {
+  display: block;
+  padding: 0.85rem 1rem;
+  font-family: var(--app-code-font);
+  font-size: var(--app-code-font-size);
+  line-height: 1.6;
+  font-variant-ligatures: contextual common-ligatures;
+  overflow-x: auto;
+}
+
+.md-prose pre.shiki code,
+.md-prose .md-code-block .shiki code {
+  padding: 0;
+  background: transparent;
+  border: none;
+}
+
+/* Switch shiki dual-theme output to the "dark" colour set when the surrounding
+   app is in dark mode. shiki emits both colours via inline style + CSS vars
+   when called with `themes: { light, dark }` and `defaultColor: "light"`. */
+[data-theme="dark"] .md-prose .shiki,
+[data-theme="dark"] .md-prose .shiki span {
+  color: var(--shiki-dark) !important;
+}

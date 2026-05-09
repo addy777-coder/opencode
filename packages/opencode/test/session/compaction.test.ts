@@ -951,7 +951,7 @@ describe("session.compaction.process", () => {
             metadata: { compaction_continue: true },
           })
           if (last?.parts[0]?.type === "text") {
-            expect(last.parts[0].text).toContain("Continue if you have next steps")
+            expect(last.parts[0].text).toContain("请继续执行尚未完成的下一步")
           }
         } finally {
           await rt.dispose()
@@ -1349,7 +1349,7 @@ describe("session.compaction.process", () => {
           expect(result).toBe("continue")
           expect(last?.info.role).toBe("user")
           if (last?.parts[0]?.type === "text") {
-            expect(last.parts[0].text).toContain("previous request exceeded the provider's size limit")
+            expect(last.parts[0].text).toContain("超过了供应商的上下文限制")
           }
         } finally {
           await rt.dispose()

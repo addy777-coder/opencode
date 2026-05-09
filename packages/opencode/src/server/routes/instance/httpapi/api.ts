@@ -21,8 +21,8 @@ import { TuiApi } from "./groups/tui"
 import { WorkspaceApi } from "./groups/workspace"
 import { V2Api } from "./groups/v2"
 
-// SSE event schemas built from the same BusEvent/SyncEvent registries that
-// the Hono spec uses, so both specs emit identical Event/SyncEvent components.
+// SSE event schemas built from the same BusEvent/SyncEvent registries used by
+// the public OpenAPI document, so Event/SyncEvent components stay identical.
 const EventSchema = Schema.Union(BusEvent.effectPayloads()).annotate({ identifier: "Event" })
 const SyncEventSchemas = SyncEvent.effectPayloads()
 

@@ -1,30 +1,16 @@
-import { generateSpecs } from "hono-openapi"
-import { Hono } from "hono"
-import { adapter } from "#hono"
-import { lazy } from "@/util/lazy"
 import * as Log from "@opencode-ai/core/util/log"
-import { Flag } from "@opencode-ai/core/flag/flag"
-import { WorkspaceID } from "@/control-plane/schema"
+import { InstallationChannel, InstallationVersion } from "@opencode-ai/core/installation/version"
 import { ConfigProvider, Context, Effect, Exit, Layer, Scope } from "effect"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { OpenApi } from "effect/unstable/httpapi"
 import * as HttpApiServer from "#httpapi-server"
+import { lazy } from "@/util/lazy"
 import { MDNS } from "./mdns"
-import { AuthMiddleware, CompressionMiddleware, CorsMiddleware, ErrorMiddleware, LoggerMiddleware } from "./middleware"
-import { FenceMiddleware } from "./fence"
 import { initProjectors } from "./projectors"
-import { InstanceRoutes } from "./routes/instance"
-import { ControlPlaneRoutes } from "./routes/control"
-import { UIRoutes } from "./routes/ui"
-import { GlobalRoutes } from "./routes/global"
-import { WorkspaceRouterMiddleware } from "./workspace"
-import { InstanceMiddleware } from "./routes/instance/middleware"
-import { WorkspaceRoutes } from "./routes/control/workspace"
 import { ExperimentalHttpApiServer } from "./routes/instance/httpapi/server"
 import { disposeMiddleware } from "./routes/instance/httpapi/lifecycle"
 import { WebSocketTracker } from "./routes/instance/httpapi/websocket-tracker"
 import { PublicApi } from "./routes/instance/httpapi/public"
-import * as ServerBackend from "./backend"
 import type { CorsOptions } from "./cors"
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
@@ -33,6 +19,13 @@ globalThis.AI_SDK_LOG_WARNINGS = false
 initProjectors()
 
 const log = Log.create({ service: "server" })
+
+const backendAttributes = {
+  "opencode.server.backend": "effect-httpapi",
+  "opencode.server.backend.reason": "stable",
+  "opencode.installation.channel": InstallationChannel,
+  "opencode.installation.version": InstallationVersion,
+}
 
 export type Listener = {
   hostname: string
@@ -53,43 +46,16 @@ type ListenOptions = CorsOptions & {
   mdnsDomain?: string
 }
 
-const DefaultHono = lazy(() =>
-  withBackend({ backend: "hono", reason: "stable" }, createHono({}, { backend: "hono", reason: "stable" })),
-)
-const DefaultHttpApi = lazy(() => createDefaultHttpApi())
+const DefaultHttpApi = lazy(() => createHttpApi())
 
-function select() {
-  return ServerBackend.select()
+export function backend() {
+  return { backend: "effect-httpapi" as const, reason: "stable" as const }
 }
 
-export const backend = select
-
-export const Default = () => {
-  const selected = select()
-  return selected.backend === "effect-httpapi" ? DefaultHttpApi() : DefaultHono()
-}
-
-function create(opts: ListenOptions) {
-  const selected = select()
-  return selected.backend === "effect-httpapi"
-    ? withBackend(selected, createHttpApi(opts))
-    : withBackend(selected, createHono(opts, selected))
-}
-
-export function Legacy(opts: CorsOptions = {}) {
-  return withBackend({ backend: "hono", reason: "explicit" }, createHono(opts, { backend: "hono", reason: "explicit" }))
-}
-
-function createDefaultHttpApi() {
-  return withBackend(select(), createHttpApi())
-}
-
-function withBackend<T extends { app: ServerApp; runtime: unknown }>(selection: ServerBackend.Selection, built: T) {
-  log.info("server backend selected", ServerBackend.attributes(selection))
-  return built
-}
+export const Default = () => DefaultHttpApi()
 
 function createHttpApi(corsOptions?: CorsOptions) {
+  log.info("server backend selected", backendAttributes)
   const handler = ExperimentalHttpApiServer.webHandler(corsOptions).handler
   const app: ServerApp = {
     fetch: (request: Request) => handler(request, ExperimentalHttpApiServer.context),
@@ -97,99 +63,21 @@ function createHttpApi(corsOptions?: CorsOptions) {
       return app.fetch(input instanceof Request ? input : new Request(new URL(input, "http://localhost"), init))
     },
   }
-  return {
-    app,
-    runtime: adapter.createFetch(app),
-  }
-}
-
-function createHono(opts: CorsOptions, selection: ServerBackend.Selection = ServerBackend.force(select(), "hono")) {
-  const backendAttributes = ServerBackend.attributes(selection)
-  const app = new Hono()
-    .onError(ErrorMiddleware)
-    .use(AuthMiddleware)
-    .use(LoggerMiddleware(backendAttributes))
-    .use(CompressionMiddleware)
-    .use(CorsMiddleware(opts))
-    .route("/global", GlobalRoutes())
-
-  const runtime = adapter.create(app)
-
-  if (Flag.OPENCODE_WORKSPACE_ID) {
-    return {
-      app: app
-        .use(InstanceMiddleware(Flag.OPENCODE_WORKSPACE_ID ? WorkspaceID.make(Flag.OPENCODE_WORKSPACE_ID) : undefined))
-        .use(FenceMiddleware)
-        .route("/", InstanceRoutes(runtime.upgradeWebSocket, opts)),
-      runtime,
-    }
-  }
-
-  const workspaceApp = new Hono()
-  const workspaceLegacyApp = new Hono()
-    .use(InstanceMiddleware())
-    .route("/experimental/workspace", WorkspaceRoutes())
-    .use(WorkspaceRouterMiddleware(runtime.upgradeWebSocket))
-  workspaceApp.route("/", workspaceLegacyApp)
-
-  return {
-    app: app
-      .route("/", ControlPlaneRoutes())
-      .route("/", workspaceApp)
-      .route("/", InstanceRoutes(runtime.upgradeWebSocket, opts))
-      .route("/", UIRoutes()),
-    runtime,
-  }
+  return { app }
 }
 
 /**
- * Generate the OpenAPI document used by the SDK build.
- *
- * Since the Effect HttpApi backend now covers every Hono route (plus the new
- * `/api/session/*` v2 routes — see `httpapi-bridge.test.ts` for the parity
- * audit), `Server.openapi()` derives the spec from `OpenApi.fromApi(PublicApi)`.
- * `PublicApi` is `OpenCodeHttpApi` annotated with the `matchLegacyOpenApi`
- * transform that injects instance query parameters, strips Effect's optional
- * null arms, normalizes component names, and patches SSE response schemas so
- * the generated SDK keeps the legacy Hono shape.
- *
- * The Hono-derived spec is still reachable via `openapiHono()` so reviewers
- * can diff the two outputs while the Hono backend lingers; once the Hono
- * backend is deleted that helper goes with it.
+ * Generate the OpenAPI document used by the SDK build from the Effect HttpApi
+ * contract.
  */
 export async function openapi() {
   return OpenApi.fromApi(PublicApi)
 }
 
-/**
- * Hono-derived OpenAPI spec, retained for parity diffing only. Delete once
- * the Hono backend is removed.
- */
-export async function openapiHono() {
-  // Build a fresh app with all routes registered directly so
-  // hono-openapi can see describeRoute metadata (`.route()` wraps
-  // handlers when the sub-app has a custom errorHandler, which
-  // strips the metadata symbol).
-  const { app } = createHono({})
-  const result = await generateSpecs(app, {
-    documentation: {
-      info: {
-        title: "opencode",
-        version: "1.0.0",
-        description: "opencode api",
-      },
-      openapi: "3.1.1",
-    },
-  })
-  return result
-}
-
 export let url: URL
 
 export async function listen(opts: ListenOptions): Promise<Listener> {
-  const selected = select()
-  const inner: Listener =
-    selected.backend === "effect-httpapi" ? await listenHttpApi(opts, selected) : await listenLegacy(opts)
+  const inner = await listenHttpApi(opts)
 
   const next = new URL(inner.url)
   url = next
@@ -224,30 +112,14 @@ export async function listen(opts: ListenOptions): Promise<Listener> {
   }
 }
 
-async function listenLegacy(opts: ListenOptions): Promise<Listener> {
-  const built = create(opts)
-  const server = await built.runtime.listen(opts)
-  const innerUrl = new URL("http://localhost")
-  innerUrl.hostname = opts.hostname
-  innerUrl.port = String(server.port)
-  return {
-    hostname: opts.hostname,
-    port: server.port,
-    url: innerUrl,
-    stop: (close?: boolean) => server.stop(close),
-  }
-}
-
 /**
- * Run the effect-httpapi backend on a native Effect HTTP server. This
- * lets HttpApi routes that call `request.upgrade` (PTY connect, the
- * workspace-routing proxy WS bridge) work end-to-end; the legacy Hono
- * adapter path can't surface `request.upgrade` because its fetch handler has
- * no reference to the platform server instance for websocket upgrades.
+ * Run the Effect HttpApi backend on a native Effect HTTP server. This supports
+ * raw websocket upgrades used by PTY connect and workspace-routing proxy
+ * bridges.
  */
-async function listenHttpApi(opts: ListenOptions, selection: ServerBackend.Selection): Promise<Listener> {
+async function listenHttpApi(opts: ListenOptions): Promise<Listener> {
   log.info("server backend selected", {
-    ...ServerBackend.attributes(selection),
+    ...backendAttributes,
     "opencode.server.runtime": HttpApiServer.name,
   })
 
@@ -270,7 +142,7 @@ async function listenHttpApi(opts: ListenOptions, selection: ServerBackend.Selec
   const start = async (port: number) => {
     const scope = Scope.makeUnsafe()
     try {
-      // Effect's `HttpMiddleware` interface returns `Effect<…, any, any>` by
+      // Effect's `HttpMiddleware` interface returns `Effect<..., any, any>` by
       // design, which leaks `R = any` through `HttpRouter.serve`. The actual
       // requirements at this point are fully satisfied by `createRoutes` and the
       // platform HTTP server layer; cast away the `any` to satisfy `runPromise`.
@@ -287,7 +159,7 @@ async function listenHttpApi(opts: ListenOptions, selection: ServerBackend.Selec
     }
   }
 
-  // Match the legacy adapter port-resolution behavior: explicit `0` prefers
+  // Preserve the historical port-resolution behavior: explicit `0` prefers
   // 4096 first, then any free port.
   let resolved: Awaited<ReturnType<typeof start>> | undefined
   if (opts.port === 0) {
