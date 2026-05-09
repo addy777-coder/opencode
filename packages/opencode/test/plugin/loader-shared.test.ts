@@ -550,14 +550,20 @@ describe("plugin.loader.shared", () => {
     }
   })
 
-  test("skips legacy codex and copilot auth plugin specs", async () => {
+  test("skips auth plugin specs that are already built in", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {
         await Bun.write(
           path.join(dir, "opencode.json"),
           JSON.stringify(
             {
-              plugin: ["opencode-openai-codex-auth@1.0.0", "opencode-copilot-auth@1.0.0", "regular-plugin@1.0.0"],
+              plugin: [
+                "opencode-openai-codex-auth@1.0.0",
+                "opencode-copilot-auth@1.0.0",
+                "opencode-gitlab-auth@2.0.1",
+                "@gitlab/opencode-gitlab-auth@1.3.3",
+                "regular-plugin@1.0.0",
+              ],
             },
             null,
             2,
@@ -575,6 +581,8 @@ describe("plugin.loader.shared", () => {
       expect(pkgs).toContain("regular-plugin@1.0.0")
       expect(pkgs).not.toContain("opencode-openai-codex-auth@1.0.0")
       expect(pkgs).not.toContain("opencode-copilot-auth@1.0.0")
+      expect(pkgs).not.toContain("opencode-gitlab-auth@2.0.1")
+      expect(pkgs).not.toContain("@gitlab/opencode-gitlab-auth@1.3.3")
     } finally {
       install.mockRestore()
     }

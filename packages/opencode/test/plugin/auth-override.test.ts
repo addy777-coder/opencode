@@ -37,6 +37,23 @@ function layer(directory: string, plugins: string[]) {
 }
 
 describe("plugin.auth-override", () => {
+  test("built-in gitlab auth plugin exposes login methods", async () => {
+    await using tmp = await tmpdir()
+
+    const methods = await provideTestInstance({
+      directory: tmp.path,
+      fn: async () => {
+        return Effect.runPromise(
+          ProviderAuth.Service.use((svc) => svc.methods()).pipe(Effect.provide(layer(tmp.path, []))),
+        )
+      },
+    })
+
+    const gitlab = methods[ProviderID.make("gitlab")]
+    expect(gitlab).toBeDefined()
+    expect(gitlab.map((method) => method.label)).toEqual(["GitLab OAuth", "GitLab Personal Access Token"])
+  }, 30000)
+
   test("user plugin overrides built-in github-copilot auth", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {
