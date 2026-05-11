@@ -17,6 +17,19 @@ import { makeRuntime } from "../../src/effect/run-service"
 const env = makeRuntime(Env.Service, Env.defaultLayer)
 const set = (k: string, v: string) => env.runSync((svc) => svc.set(k, v))
 
+const BEDROCK_MODELS = {
+  "anthropic.claude-sonnet-4-20250514-v1:0": {
+    name: "Claude Sonnet 4",
+    reasoning: true,
+    tool_call: true,
+    limit: { context: 200000, output: 64000 },
+  },
+}
+
+function bedrockProvider(input: Record<string, unknown> = {}) {
+  return { models: BEDROCK_MODELS, ...input }
+}
+
 async function list() {
   return AppRuntime.runPromise(
     Effect.gen(function* () {
@@ -34,11 +47,11 @@ test("Bedrock: config region takes precedence over AWS_REGION env var", async ()
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           provider: {
-            "amazon-bedrock": {
+            "amazon-bedrock": bedrockProvider({
               options: {
                 region: "eu-west-1",
               },
-            },
+            }),
           },
         }),
       )
@@ -63,6 +76,9 @@ test("Bedrock: falls back to AWS_REGION env var when no config region", async ()
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
+          provider: {
+            "amazon-bedrock": bedrockProvider(),
+          },
         }),
       )
     },
@@ -87,11 +103,11 @@ test("Bedrock: loads when bearer token from auth.json is present", async () => {
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           provider: {
-            "amazon-bedrock": {
+            "amazon-bedrock": bedrockProvider({
               options: {
                 region: "eu-west-1",
               },
-            },
+            }),
           },
         }),
       )
@@ -153,12 +169,12 @@ test("Bedrock: config profile takes precedence over AWS_PROFILE env var", async 
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           provider: {
-            "amazon-bedrock": {
+            "amazon-bedrock": bedrockProvider({
               options: {
                 profile: "my-custom-profile",
                 region: "us-east-1",
               },
-            },
+            }),
           },
         }),
       )
@@ -184,11 +200,11 @@ test("Bedrock: includes custom endpoint in options when specified", async () => 
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           provider: {
-            "amazon-bedrock": {
+            "amazon-bedrock": bedrockProvider({
               options: {
                 endpoint: "https://bedrock-runtime.us-east-1.vpce-xxxxx.amazonaws.com",
               },
-            },
+            }),
           },
         }),
       )
@@ -215,11 +231,11 @@ test("Bedrock: autoloads when AWS_WEB_IDENTITY_TOKEN_FILE is present", async () 
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           provider: {
-            "amazon-bedrock": {
+            "amazon-bedrock": bedrockProvider({
               options: {
                 region: "us-east-1",
               },
-            },
+            }),
           },
         }),
       )
@@ -240,7 +256,7 @@ test("Bedrock: autoloads when AWS_WEB_IDENTITY_TOKEN_FILE is present", async () 
 })
 
 // Tests for cross-region inference profile prefix handling
-// Models from models.dev may come with prefixes already (e.g., us., eu., global.)
+// Configured Bedrock model IDs may come with prefixes already (e.g., us., eu., global.)
 // These should NOT be double-prefixed when passed to the SDK
 
 test("Bedrock: model with us. prefix should not be double-prefixed", async () => {

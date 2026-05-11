@@ -7,7 +7,6 @@ import { Global } from "@opencode-ai/core/global"
 import { Instance } from "../../src/project/instance"
 import { WithInstance } from "../../src/project/with-instance"
 import { Plugin } from "../../src/plugin/index"
-import { ModelsDev } from "@/provider/models"
 import { Provider } from "@/provider/provider"
 import { ProviderID, ModelID } from "../../src/provider/schema"
 import { Filesystem } from "@/util/filesystem"
@@ -18,6 +17,101 @@ import { makeRuntime } from "../../src/effect/run-service"
 
 const env = makeRuntime(Env.Service, Env.defaultLayer)
 const set = (k: string, v: string) => env.runSync((svc) => svc.set(k, v))
+
+const ANTHROPIC_MODELS = {
+  "claude-sonnet-4-20250514": {
+    name: "Claude Sonnet 4",
+    attachment: true,
+    reasoning: true,
+    tool_call: true,
+    limit: { context: 200000, output: 64000 },
+  },
+  "claude-haiku-4-5": {
+    name: "Claude Haiku 4.5",
+    reasoning: false,
+    tool_call: true,
+    limit: { context: 200000, output: 8192 },
+  },
+  "claude-opus-4-20250514": {
+    name: "Claude Opus 4",
+    attachment: true,
+    reasoning: true,
+    tool_call: true,
+    limit: { context: 200000, output: 32000 },
+  },
+}
+
+const OPENAI_MODELS = {
+  "gpt-5": {
+    name: "GPT-5",
+    reasoning: true,
+    tool_call: true,
+    release_date: "2025-08-07",
+    limit: { context: 400000, output: 128000 },
+  },
+}
+
+const GOOGLE_MODELS = {
+  "gemini-2.5-flash": {
+    name: "Gemini 2.5 Flash",
+    attachment: true,
+    reasoning: true,
+    tool_call: true,
+    limit: { context: 1048576, output: 65536 },
+  },
+}
+
+const CLOUDFLARE_MODELS = {
+  "openai/gpt-5": {
+    name: "GPT-5 through AI Gateway",
+    reasoning: true,
+    tool_call: true,
+    limit: { context: 400000, output: 128000 },
+  },
+}
+
+const OPENCODE_MODELS = {
+  "free-model": {
+    name: "Free Model",
+    tool_call: true,
+    cost: { input: 0, output: 0 },
+    limit: { context: 128000, output: 8192 },
+  },
+  "paid-model": {
+    name: "Paid Model",
+    tool_call: true,
+    cost: { input: 1, output: 2 },
+    limit: { context: 128000, output: 8192 },
+  },
+}
+
+function anthropicProvider(input: Record<string, unknown> = {}) {
+  return { models: ANTHROPIC_MODELS, ...input }
+}
+
+function anthropicSonnet(input: Record<string, unknown> = {}) {
+  return { ...ANTHROPIC_MODELS["claude-sonnet-4-20250514"], ...input }
+}
+
+function openaiProvider(input: Record<string, unknown> = {}) {
+  return { models: OPENAI_MODELS, ...input }
+}
+
+function openaiGpt5(input: Record<string, unknown> = {}) {
+  return { ...OPENAI_MODELS["gpt-5"], ...input }
+}
+
+function googleProvider(input: Record<string, unknown> = {}) {
+  return { models: GOOGLE_MODELS, ...input }
+}
+
+function cloudflareProvider(input: Record<string, unknown> = {}) {
+  return { models: CLOUDFLARE_MODELS, ...input }
+}
+
+function opencodeProvider(input: Record<string, unknown> = {}) {
+  return { models: OPENCODE_MODELS, ...input }
+}
 
 async function run<A, E>(fn: (provider: Provider.Interface) => Effect.Effect<A, E, never>) {
   return AppRuntime.runPromise(
@@ -70,7 +164,7 @@ function paid(providers: Awaited<ReturnType<typeof list>>) {
   return Object.values(item.models).filter((model) => model.cost.input > 0).length
 }
 
-test("provider loaded from env variable", async () => {
+test("env variable alone does not load provider without configured models", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
       await Bun.write(
@@ -86,16 +180,12 @@ test("provider loaded from env variable", async () => {
     fn: async () => {
       set("ANTHROPIC_API_KEY", "test-api-key")
       const providers = await list()
-      expect(providers[ProviderID.anthropic]).toBeDefined()
-      // Provider should retain its connection source even if custom loaders
-      // merge additional options.
-      expect(providers[ProviderID.anthropic].source).toBe("env")
-      expect(providers[ProviderID.anthropic].options.headers["anthropic-beta"]).toBeDefined()
+      expect(providers[ProviderID.anthropic]).toBeUndefined()
     },
   })
 })
 
-test("provider loaded from config with apiKey option", async () => {
+test("provider without configured models is not loaded with apiKey option", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
       await Bun.write(
@@ -117,7 +207,7 @@ test("provider loaded from config with apiKey option", async () => {
     directory: tmp.path,
     fn: async () => {
       const providers = await list()
-      expect(providers[ProviderID.anthropic]).toBeDefined()
+      expect(providers[ProviderID.anthropic]).toBeUndefined()
     },
   })
 })
@@ -152,6 +242,10 @@ test("enabled_providers restricts to only listed providers", async () => {
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           enabled_providers: ["anthropic"],
+          provider: {
+            anthropic: anthropicProvider(),
+            openai: openaiProvider(),
+          },
         }),
       )
     },
@@ -176,9 +270,9 @@ test("model whitelist filters models for provider", async () => {
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           provider: {
-            anthropic: {
+            anthropic: anthropicProvider({
               whitelist: ["claude-sonnet-4-20250514"],
-            },
+            }),
           },
         }),
       )
@@ -205,9 +299,9 @@ test("model blacklist excludes specific models", async () => {
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           provider: {
-            anthropic: {
+            anthropic: anthropicProvider({
               blacklist: ["claude-sonnet-4-20250514"],
-            },
+            }),
           },
         }),
       )
@@ -370,12 +464,12 @@ test("env variable takes precedence, config merges options", async () => {
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           provider: {
-            anthropic: {
+            anthropic: anthropicProvider({
               options: {
                 timeout: 60000,
                 chunkTimeout: 15000,
               },
-            },
+            }),
           },
         }),
       )
@@ -401,6 +495,9 @@ test("getModel returns model for valid provider/model", async () => {
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
+          provider: {
+            anthropic: anthropicProvider(),
+          },
         }),
       )
     },
@@ -426,6 +523,9 @@ test("getModel throws ModelNotFoundError for invalid model", async () => {
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
+          provider: {
+            anthropic: anthropicProvider(),
+          },
         }),
       )
     },
@@ -446,6 +546,9 @@ test("getModel throws ModelNotFoundError for invalid provider", async () => {
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
+          provider: {
+            anthropic: anthropicProvider(),
+          },
         }),
       )
     },
@@ -477,6 +580,9 @@ test("defaultModel returns first available model when no config set", async () =
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
+          provider: {
+            anthropic: anthropicProvider(),
+          },
         }),
       )
     },
@@ -636,9 +742,9 @@ test("provider removed when all models filtered out", async () => {
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           provider: {
-            anthropic: {
+            anthropic: anthropicProvider({
               whitelist: ["nonexistent-model"],
-            },
+            }),
           },
         }),
       )
@@ -661,6 +767,9 @@ test("closest finds model by partial match", async () => {
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
+          provider: {
+            anthropic: anthropicProvider(),
+          },
         }),
       )
     },
@@ -684,6 +793,9 @@ test("closest returns undefined for nonexistent provider", async () => {
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
+          provider: {
+            anthropic: anthropicProvider(),
+          },
         }),
       )
     },
@@ -811,7 +923,7 @@ test("explicit baseURL overrides api field", async () => {
   })
 })
 
-test("model inherits properties from existing database model", async () => {
+test("model keeps explicitly configured properties", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
       await Bun.write(
@@ -821,9 +933,9 @@ test("model inherits properties from existing database model", async () => {
           provider: {
             anthropic: {
               models: {
-                "claude-sonnet-4-20250514": {
+                "claude-sonnet-4-20250514": anthropicSonnet({
                   name: "Custom Name for Sonnet",
-                },
+                }),
               },
             },
           },
@@ -898,10 +1010,10 @@ test("whitelist and blacklist can be combined", async () => {
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           provider: {
-            anthropic: {
+            anthropic: anthropicProvider({
               whitelist: ["claude-sonnet-4-20250514", "claude-opus-4-20250514"],
               blacklist: ["claude-opus-4-20250514"],
-            },
+            }),
           },
         }),
       )
@@ -1010,6 +1122,9 @@ test("getSmallModel returns appropriate small model", async () => {
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
+          provider: {
+            anthropic: anthropicProvider(),
+          },
         }),
       )
     },
@@ -1033,6 +1148,9 @@ test("getSmallModel respects config small_model override", async () => {
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           small_model: "anthropic/claude-sonnet-4-20250514",
+          provider: {
+            anthropic: anthropicProvider(),
+          },
         }),
       )
     },
@@ -1072,12 +1190,12 @@ test("multiple providers can be configured simultaneously", async () => {
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           provider: {
-            anthropic: {
+            anthropic: anthropicProvider({
               options: { timeout: 30000 },
-            },
-            openai: {
+            }),
+            openai: openaiProvider({
               options: { timeout: 60000 },
-            },
+            }),
           },
         }),
       )
@@ -1260,12 +1378,12 @@ test("model cost overrides existing cost values", async () => {
           provider: {
             anthropic: {
               models: {
-                "claude-sonnet-4-20250514": {
+                "claude-sonnet-4-20250514": anthropicSonnet({
                   cost: {
                     input: 999,
                     output: 888,
                   },
-                },
+                }),
               },
             },
           },
@@ -1346,6 +1464,11 @@ test("disabled_providers and enabled_providers interaction", async () => {
           enabled_providers: ["anthropic", "openai"],
           // Then disabled_providers filters from the enabled set
           disabled_providers: ["openai"],
+          provider: {
+            anthropic: anthropicProvider(),
+            openai: openaiProvider(),
+            google: googleProvider(),
+          },
         }),
       )
     },
@@ -1525,6 +1648,9 @@ test("getModel returns consistent results", async () => {
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
+          provider: {
+            anthropic: anthropicProvider(),
+          },
         }),
       )
     },
@@ -1584,6 +1710,9 @@ test("ModelNotFoundError includes suggestions for typos", async () => {
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
+          provider: {
+            anthropic: anthropicProvider(),
+          },
         }),
       )
     },
@@ -1610,6 +1739,9 @@ test("ModelNotFoundError for provider includes suggestions", async () => {
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
+          provider: {
+            anthropic: anthropicProvider(),
+          },
         }),
       )
     },
@@ -1636,6 +1768,9 @@ test("getProvider returns undefined for nonexistent provider", async () => {
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
+          provider: {
+            anthropic: anthropicProvider(),
+          },
         }),
       )
     },
@@ -1656,6 +1791,9 @@ test("getProvider returns provider info", async () => {
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
+          provider: {
+            anthropic: anthropicProvider(),
+          },
         }),
       )
     },
@@ -1699,6 +1837,9 @@ test("closest checks multiple query terms in order", async () => {
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
+          provider: {
+            anthropic: anthropicProvider(),
+          },
         }),
       )
     },
@@ -1760,14 +1901,14 @@ test("provider options are deeply merged", async () => {
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           provider: {
-            anthropic: {
+            anthropic: anthropicProvider({
               options: {
                 headers: {
                   "X-Custom": "custom-value",
                 },
                 timeout: 30000,
               },
-            },
+            }),
           },
         }),
       )
@@ -1787,7 +1928,7 @@ test("provider options are deeply merged", async () => {
   })
 })
 
-test("custom model inherits npm package from models.dev provider config", async () => {
+test("configured model under known provider uses provider SDK default", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
       await Bun.write(
@@ -1821,7 +1962,7 @@ test("custom model inherits npm package from models.dev provider config", async 
   })
 })
 
-test("custom model inherits api.url from models.dev provider", async () => {
+test("custom model uses api.url from explicit provider config", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
       await Bun.write(
@@ -1830,6 +1971,7 @@ test("custom model inherits api.url from models.dev provider", async () => {
           $schema: "https://opencode.ai/config.json",
           provider: {
             openrouter: {
+              api: "https://openrouter.ai/api/v1",
               models: {
                 "prime-intellect/intellect-3": {},
                 "deepseek/deepseek-r1-0528": {
@@ -1849,117 +1991,16 @@ test("custom model inherits api.url from models.dev provider", async () => {
       const providers = await list()
       expect(providers[ProviderID.openrouter]).toBeDefined()
 
-      // New model not in database should inherit api.url from provider
       const intellect = providers[ProviderID.openrouter].models["prime-intellect/intellect-3"]
       expect(intellect).toBeDefined()
       expect(intellect.api.url).toBe("https://openrouter.ai/api/v1")
 
-      // Another new model should also inherit api.url
       const deepseek = providers[ProviderID.openrouter].models["deepseek/deepseek-r1-0528"]
       expect(deepseek).toBeDefined()
       expect(deepseek.api.url).toBe("https://openrouter.ai/api/v1")
       expect(deepseek.name).toBe("DeepSeek R1")
     },
   })
-})
-
-test("mode cost preserves over-200k pricing from base model", () => {
-  const provider = {
-    id: "openai",
-    name: "OpenAI",
-    env: [],
-    api: "https://api.openai.com/v1",
-    models: {
-      "gpt-5.4": {
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        family: "gpt",
-        release_date: "2026-03-05",
-        attachment: true,
-        reasoning: true,
-        temperature: false,
-        tool_call: true,
-        cost: {
-          input: 2.5,
-          output: 15,
-          cache_read: 0.25,
-          context_over_200k: {
-            input: 5,
-            output: 22.5,
-            cache_read: 0.5,
-          },
-        },
-        limit: {
-          context: 1_050_000,
-          input: 922_000,
-          output: 128_000,
-        },
-        experimental: {
-          modes: {
-            fast: {
-              cost: {
-                input: 5,
-                output: 30,
-                cache_read: 0.5,
-              },
-              provider: {
-                body: {
-                  service_tier: "priority",
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-  } as unknown as ModelsDev.Provider
-
-  const model = Provider.fromModelsDevProvider(provider).models["gpt-5.4-fast"]
-  expect(model.cost.input).toEqual(5)
-  expect(model.cost.output).toEqual(30)
-  expect(model.cost.cache.read).toEqual(0.5)
-  expect(model.cost.cache.write).toEqual(0)
-  expect(model.options["serviceTier"]).toEqual("priority")
-  expect(model.cost.experimentalOver200K).toEqual({
-    input: 5,
-    output: 22.5,
-    cache: {
-      read: 0.5,
-      write: 0,
-    },
-  })
-})
-
-test("models.dev normalization fills required response fields", () => {
-  const provider = {
-    id: "gateway",
-    name: "Gateway",
-    env: [],
-    models: {
-      "gpt-5.4": {
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        family: "gpt",
-        cost: {
-          input: 2.5,
-          output: 15,
-        },
-        limit: {
-          context: 1_050_000,
-          input: 922_000,
-          output: 128_000,
-        },
-      },
-    },
-  } as unknown as ModelsDev.Provider
-
-  const model = Provider.fromModelsDevProvider(provider).models["gpt-5.4"]
-  expect(model.api.url).toBe("")
-  expect(model.capabilities.temperature).toBe(false)
-  expect(model.capabilities.reasoning).toBe(false)
-  expect(model.capabilities.attachment).toBe(false)
-  expect(model.capabilities.toolcall).toBe(true)
-  expect(model.release_date).toBe("")
 })
 
 test("model variants are generated for reasoning models", async () => {
@@ -1969,6 +2010,9 @@ test("model variants are generated for reasoning models", async () => {
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
+          provider: {
+            anthropic: anthropicProvider(),
+          },
         }),
       )
     },
@@ -1997,11 +2041,11 @@ test("model variants can be disabled via config", async () => {
           provider: {
             anthropic: {
               models: {
-                "claude-sonnet-4-20250514": {
+                "claude-sonnet-4-20250514": anthropicSonnet({
                   variants: {
                     high: { disabled: true },
                   },
-                },
+                }),
               },
             },
           },
@@ -2033,7 +2077,7 @@ test("model variants can be customized via config", async () => {
           provider: {
             anthropic: {
               models: {
-                "claude-sonnet-4-20250514": {
+                "claude-sonnet-4-20250514": anthropicSonnet({
                   variants: {
                     high: {
                       thinking: {
@@ -2042,7 +2086,7 @@ test("model variants can be customized via config", async () => {
                       },
                     },
                   },
-                },
+                }),
               },
             },
           },
@@ -2072,14 +2116,14 @@ test("disabled key is stripped from variant config", async () => {
           provider: {
             anthropic: {
               models: {
-                "claude-sonnet-4-20250514": {
+                "claude-sonnet-4-20250514": anthropicSonnet({
                   variants: {
                     max: {
                       disabled: false,
                       customField: "test",
                     },
                   },
-                },
+                }),
               },
             },
           },
@@ -2110,12 +2154,12 @@ test("all variants can be disabled via config", async () => {
           provider: {
             anthropic: {
               models: {
-                "claude-sonnet-4-20250514": {
+                "claude-sonnet-4-20250514": anthropicSonnet({
                   variants: {
                     high: { disabled: true },
                     max: { disabled: true },
                   },
-                },
+                }),
               },
             },
           },
@@ -2145,13 +2189,13 @@ test("variant config merges with generated variants", async () => {
           provider: {
             anthropic: {
               models: {
-                "claude-sonnet-4-20250514": {
+                "claude-sonnet-4-20250514": anthropicSonnet({
                   variants: {
                     high: {
                       extraOption: "custom-value",
                     },
                   },
-                },
+                }),
               },
             },
           },
@@ -2183,11 +2227,11 @@ test("variants filtered in second pass for database models", async () => {
           provider: {
             openai: {
               models: {
-                "gpt-5": {
+                "gpt-5": openaiGpt5({
                   variants: {
                     high: { disabled: true },
                   },
-                },
+                }),
               },
             },
           },
@@ -2360,6 +2404,9 @@ test("cloudflare-ai-gateway loads with env variables", async () => {
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
+          provider: {
+            "cloudflare-ai-gateway": cloudflareProvider(),
+          },
         }),
       )
     },
@@ -2384,11 +2431,11 @@ test("cloudflare-ai-gateway forwards config metadata options", async () => {
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           provider: {
-            "cloudflare-ai-gateway": {
+            "cloudflare-ai-gateway": cloudflareProvider({
               options: {
                 metadata: { invoked_by: "test", project: "opencode" },
               },
-            },
+            }),
           },
         }),
       )
@@ -2475,8 +2522,21 @@ test("plugin config providers persist after instance dispose", async () => {
 test("plugin config enabled and disabled providers are honored", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
-      const root = path.join(dir, ".opencode", "plugin")
+      const configDir = path.join(dir, ".opencode")
+      const root = path.join(configDir, "plugin")
       await mkdir(root, { recursive: true })
+      await markPluginDependenciesReady(configDir)
+      await markPluginDependenciesReady(Global.Path.config)
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          provider: {
+            anthropic: anthropicProvider(),
+            openai: openaiProvider(),
+          },
+        }),
+      )
       await Bun.write(
         path.join(root, "provider-filter.ts"),
         [
@@ -2514,6 +2574,9 @@ test("opencode loader keeps paid models when config apiKey is present", async ()
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
+          provider: {
+            opencode: opencodeProvider(),
+          },
         }),
       )
     },
@@ -2531,11 +2594,11 @@ test("opencode loader keeps paid models when config apiKey is present", async ()
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
           provider: {
-            opencode: {
+            opencode: opencodeProvider({
               options: {
                 apiKey: "test-key",
               },
-            },
+            }),
           },
         }),
       )
@@ -2558,6 +2621,9 @@ test("opencode loader keeps paid models when auth exists", async () => {
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
+          provider: {
+            opencode: opencodeProvider(),
+          },
         }),
       )
     },
@@ -2574,6 +2640,9 @@ test("opencode loader keeps paid models when auth exists", async () => {
         path.join(dir, "opencode.json"),
         JSON.stringify({
           $schema: "https://opencode.ai/config.json",
+          provider: {
+            opencode: opencodeProvider(),
+          },
         }),
       )
     },

@@ -8,7 +8,6 @@ import { Npm } from "@opencode-ai/core/npm"
 import { Hash } from "@opencode-ai/core/util/hash"
 import { Plugin } from "../plugin"
 import { type LanguageModelV3 } from "@ai-sdk/provider"
-import * as ModelsDev from "./models"
 import { Auth } from "../auth"
 import { Env } from "../env"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
@@ -114,6 +113,72 @@ const BUNDLED_PROVIDERS: Record<string, () => Promise<(opts: any) => BundledSDK>
   "gitlab-ai-provider": () => import("gitlab-ai-provider").then((m) => m.createGitLab),
   "@ai-sdk/github-copilot": () => import("./sdk/copilot/copilot-provider").then((m) => m.createOpenaiCompatible),
   "venice-ai-sdk-provider": () => import("venice-ai-sdk-provider").then((m) => m.createVenice),
+}
+
+type ProviderDefaults = {
+  name: string
+  env: string[]
+  npm?: string
+  api?: string
+}
+
+const PROVIDER_DEFAULTS: Record<string, ProviderDefaults> = {
+  "amazon-bedrock": {
+    name: "Amazon Bedrock",
+    env: ["AWS_BEARER_TOKEN_BEDROCK", "AWS_ACCESS_KEY_ID", "AWS_PROFILE", "AWS_WEB_IDENTITY_TOKEN_FILE"],
+    npm: "@ai-sdk/amazon-bedrock",
+  },
+  "cloudflare-ai-gateway": {
+    name: "Cloudflare AI Gateway",
+    env: ["CLOUDFLARE_API_TOKEN", "CF_AIG_TOKEN"],
+    npm: "ai-gateway-provider",
+  },
+  alibaba: {
+    name: "Alibaba",
+    env: ["ALIBABA_API_KEY"],
+    npm: "@ai-sdk/alibaba",
+    api: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  },
+  anthropic: {
+    name: "Anthropic",
+    env: ["ANTHROPIC_API_KEY"],
+    npm: "@ai-sdk/anthropic",
+    api: "https://api.anthropic.com/v1",
+  },
+  google: {
+    name: "Google",
+    env: ["GOOGLE_GENERATIVE_AI_API_KEY", "GOOGLE_API_KEY"],
+    npm: "@ai-sdk/google",
+    api: "https://generativelanguage.googleapis.com/v1beta",
+  },
+  minimax: {
+    name: "MiniMax",
+    env: ["MINIMAX_API_KEY"],
+    npm: "@ai-sdk/openai-compatible",
+  },
+  opencode: {
+    name: "opencode",
+    env: ["OPENCODE_API_KEY"],
+    npm: "@ai-sdk/openai-compatible",
+    api: "https://api.opencode.ai/v1",
+  },
+  openai: {
+    name: "OpenAI",
+    env: ["OPENAI_API_KEY"],
+    npm: "@ai-sdk/openai",
+    api: "https://api.openai.com/v1",
+  },
+  openrouter: {
+    name: "OpenRouter",
+    env: ["OPENROUTER_API_KEY"],
+    npm: "@openrouter/ai-sdk-provider",
+    api: "https://openrouter.ai/api/v1",
+  },
+  vivgrid: {
+    name: "VivGrid",
+    env: ["VIVGRID_API_KEY"],
+    npm: "@ai-sdk/openai-compatible",
+  },
 }
 
 type CustomModelLoader = (sdk: any, modelID: string, options?: Record<string, any>) => Promise<any>
@@ -320,8 +385,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         autoload: true,
         options: providerOptions,
         async getModel(sdk: any, modelID: string, options?: Record<string, any>) {
-          // Skip region prefixing if model already has a cross-region inference profile prefix
-          // Models from models.dev may already include prefixes like us., eu., global., etc.
+          // Skip region prefixing if the configured model already includes a cross-region inference profile prefix.
           const crossRegionPrefixes = ["global.", "us.", "eu.", "jp.", "apac.", "au."]
           if (crossRegionPrefixes.some((prefix) => modelID.startsWith(prefix))) {
             return sdk.languageModel(modelID)
@@ -936,7 +1000,13 @@ export const ConfigProvidersResult = Schema.Struct({
 export type ConfigProvidersResult = Types.DeepMutable<Schema.Schema.Type<typeof ConfigProvidersResult>>
 
 export function defaultModelIDs<T extends { models: Record<string, { id: string }> }>(providers: Record<string, T>) {
-  return mapValues(providers, (item) => sort(Object.values(item.models))[0].id)
+  return Object.fromEntries(
+    Object.entries(providers).flatMap(([providerID, item]) => {
+      const model = sort(Object.values(item.models))[0]
+      if (!model) return []
+      return [[providerID, model.id]]
+    }),
+  )
 }
 
 export interface Interface {
@@ -954,7 +1024,7 @@ export interface Interface {
 
 interface State {
   models: Map<string, LanguageModelV3>
-  providers: Record<ProviderID, Info>
+  providers: Record<string, Info>
   sdk: Map<string, BundledSDK>
   modelLoaders: Record<string, CustomModelLoader>
   varsLoaders: Record<string, CustomVarsLoader>
@@ -962,117 +1032,10 @@ interface State {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Provider") {}
 
-function cost(c: ModelsDev.Model["cost"]): Model["cost"] {
-  const result: Model["cost"] = {
-    input: c?.input ?? 0,
-    output: c?.output ?? 0,
-    cache: {
-      read: c?.cache_read ?? 0,
-      write: c?.cache_write ?? 0,
-    },
-  }
-  if (c?.context_over_200k) {
-    result.experimentalOver200K = {
-      cache: {
-        read: c.context_over_200k.cache_read ?? 0,
-        write: c.context_over_200k.cache_write ?? 0,
-      },
-      input: c.context_over_200k.input,
-      output: c.context_over_200k.output,
-    }
-  }
-  return result
-}
-
-function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model): Model {
-  const base: Model = {
-    id: ModelID.make(model.id),
-    providerID: ProviderID.make(provider.id),
-    name: model.name,
-    family: model.family,
-    api: {
-      id: model.id,
-      url: model.provider?.api ?? provider.api ?? "",
-      npm: model.provider?.npm ?? provider.npm ?? "@ai-sdk/openai-compatible",
-    },
-    status: model.status ?? "active",
-    headers: {},
-    options: {},
-    cost: cost(model.cost),
-    limit: {
-      context: model.limit.context,
-      input: model.limit.input,
-      output: model.limit.output,
-    },
-    capabilities: {
-      temperature: model.temperature ?? false,
-      reasoning: model.reasoning ?? false,
-      attachment: model.attachment ?? false,
-      toolcall: model.tool_call ?? true,
-      input: {
-        text: model.modalities?.input?.includes("text") ?? false,
-        audio: model.modalities?.input?.includes("audio") ?? false,
-        image: model.modalities?.input?.includes("image") ?? false,
-        video: model.modalities?.input?.includes("video") ?? false,
-        pdf: model.modalities?.input?.includes("pdf") ?? false,
-      },
-      output: {
-        text: model.modalities?.output?.includes("text") ?? false,
-        audio: model.modalities?.output?.includes("audio") ?? false,
-        image: model.modalities?.output?.includes("image") ?? false,
-        video: model.modalities?.output?.includes("video") ?? false,
-        pdf: model.modalities?.output?.includes("pdf") ?? false,
-      },
-      interleaved: model.interleaved ?? false,
-    },
-    release_date: model.release_date ?? "",
-    variants: {},
-  }
-
-  return {
-    ...base,
-    variants: mapValues(ProviderTransform.variants(base), (v) => v),
-  }
-}
-
-export function fromModelsDevProvider(provider: ModelsDev.Provider): Info {
-  const models: Record<string, Model> = {}
-  for (const [key, model] of Object.entries(provider.models)) {
-    models[key] = fromModelsDevModel(provider, model)
-    for (const [mode, opts] of Object.entries(model.experimental?.modes ?? {})) {
-      const id = `${model.id}-${mode}`
-      const base = fromModelsDevModel(provider, model)
-      models[id] = {
-        ...base,
-        id: ModelID.make(id),
-        name: `${model.name} ${mode[0].toUpperCase()}${mode.slice(1)}`,
-        cost: opts.cost ? mergeDeep(base.cost, cost(opts.cost)) : base.cost,
-        options: opts.provider?.body
-          ? Object.fromEntries(
-              Object.entries(opts.provider.body).map(([k, v]) => [
-                k.replace(/_([a-z])/g, (_, c) => c.toUpperCase()),
-                v,
-              ]),
-            )
-          : base.options,
-        headers: opts.provider?.headers ?? base.headers,
-      }
-    }
-  }
-  return {
-    id: ProviderID.make(provider.id),
-    source: "custom",
-    name: provider.name,
-    env: [...(provider.env ?? [])],
-    options: {},
-    models,
-  }
-}
-
 const layer: Layer.Layer<
   Service,
   never,
-  Config.Service | Auth.Service | Plugin.Service | AppFileSystem.Service | Env.Service | ModelsDev.Service
+  Config.Service | Auth.Service | Plugin.Service | AppFileSystem.Service | Env.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -1081,17 +1044,14 @@ const layer: Layer.Layer<
     const auth = yield* Auth.Service
     const env = yield* Env.Service
     const plugin = yield* Plugin.Service
-    const modelsDevSvc = yield* ModelsDev.Service
 
     const state = yield* InstanceState.make<State>(() =>
       Effect.gen(function* () {
         using _ = log.time("state")
         const bridge = yield* EffectBridge.make()
         const cfg = yield* config.get()
-        const modelsDev = yield* modelsDevSvc.get()
-        const database = mapValues(modelsDev, fromModelsDevProvider)
 
-        const providers: Record<ProviderID, Info> = {} as Record<ProviderID, Info>
+        const providers: Record<string, Info> = {}
         const languages = new Map<string, LanguageModelV3>()
         const modelLoaders: {
           [providerID: string]: CustomModelLoader
@@ -1114,15 +1074,24 @@ const layer: Layer.Layer<
 
         function mergeProvider(providerID: ProviderID, provider: Partial<Info>) {
           const existing = providers[providerID]
-          if (existing) {
-            // @ts-expect-error
-            providers[providerID] = mergeDeep(existing, provider)
-            return
-          }
-          const match = database[providerID]
-          if (!match) return
           // @ts-expect-error
-          providers[providerID] = mergeDeep(match, provider)
+          if (existing) providers[providerID] = mergeDeep(existing, provider)
+        }
+
+        function providerDefaults(providerID: string) {
+          return PROVIDER_DEFAULTS[providerID]
+        }
+
+        function makeProvider(providerID: ProviderID, provider: NonNullable<Config.Info["provider"]>[string] | undefined): Info {
+          const defaults = providerDefaults(providerID)
+          return {
+            id: providerID,
+            name: provider?.name ?? defaults?.name ?? providerID,
+            env: provider?.env ?? defaults?.env ?? [],
+            options: provider?.options ?? {},
+            source: "config",
+            models: {},
+          }
         }
 
         // load plugins first so config() hook runs before reading cfg.provider
@@ -1139,6 +1108,84 @@ const layer: Layer.Layer<
           return true
         }
 
+        // Only providers explicitly present in config are loaded into the runtime.
+        for (const [providerID, provider] of configProviders) {
+          const parsedProviderID = ProviderID.make(providerID)
+          const defaults = providerDefaults(providerID)
+          const parsed = makeProvider(parsedProviderID, provider)
+
+          for (const [modelID, model] of Object.entries(provider.models ?? {})) {
+            const apiID = model.id ?? modelID
+            const apiNpm = model.provider?.npm ?? provider.npm ?? defaults?.npm ?? "@ai-sdk/openai-compatible"
+            const name = iife(() => {
+              if (model.name) return model.name
+              if (model.id && model.id !== modelID) return modelID
+              return modelID
+            })
+            const parsedModel: Model = {
+              id: ModelID.make(modelID),
+              api: {
+                id: apiID,
+                npm: apiNpm,
+                url: model.provider?.api ?? provider.api ?? defaults?.api ?? "",
+              },
+              status: model.status ?? "active",
+              name,
+              providerID: parsedProviderID,
+              capabilities: {
+                temperature: model.temperature ?? false,
+                reasoning: model.reasoning ?? false,
+                attachment: model.attachment ?? false,
+                toolcall: model.tool_call ?? true,
+                input: {
+                  text: model.modalities?.input?.includes("text") ?? true,
+                  audio: model.modalities?.input?.includes("audio") ?? false,
+                  image: model.modalities?.input?.includes("image") ?? false,
+                  video: model.modalities?.input?.includes("video") ?? false,
+                  pdf: model.modalities?.input?.includes("pdf") ?? false,
+                },
+                output: {
+                  text: model.modalities?.output?.includes("text") ?? true,
+                  audio: model.modalities?.output?.includes("audio") ?? false,
+                  image: model.modalities?.output?.includes("image") ?? false,
+                  video: model.modalities?.output?.includes("video") ?? false,
+                  pdf: model.modalities?.output?.includes("pdf") ?? false,
+                },
+                interleaved:
+                  model.interleaved ??
+                  (apiNpm === "@ai-sdk/openai-compatible" && apiID.includes("deepseek")
+                    ? { field: "reasoning_content" }
+                    : false),
+              },
+              cost: {
+                input: model?.cost?.input ?? 0,
+                output: model?.cost?.output ?? 0,
+                cache: {
+                  read: model?.cost?.cache_read ?? 0,
+                  write: model?.cost?.cache_write ?? 0,
+                },
+              },
+              options: model.options ?? {},
+              limit: {
+                context: model.limit?.context ?? 0,
+                input: model.limit?.input,
+                output: model.limit?.output ?? 0,
+              },
+              headers: model.headers ?? {},
+              family: model.family ?? "",
+              release_date: model.release_date ?? "",
+              variants: {},
+            }
+            const merged = mergeDeep(ProviderTransform.variants(parsedModel), model.variants ?? {})
+            parsedModel.variants = mapValues(
+              pickBy(merged, (v) => !v.disabled),
+              (v) => omit(v, ["disabled"]),
+            )
+            parsed.models[modelID] = parsedModel
+          }
+          providers[providerID] = parsed
+        }
+
         for (const hook of plugins) {
           const p = hook.provider
           const models = p?.models
@@ -1147,7 +1194,7 @@ const layer: Layer.Layer<
           const providerID = ProviderID.make(p.id)
           if (disabled.has(providerID)) continue
 
-          const provider = database[providerID]
+          const provider = providers[providerID]
           if (!provider) continue
           const pluginAuth = yield* auth.get(providerID).pipe(Effect.orDie)
 
@@ -1166,103 +1213,16 @@ const layer: Layer.Layer<
           })
         }
 
-        // extend database from config
-        for (const [providerID, provider] of configProviders) {
-          const existing = database[providerID]
-          const parsed: Info = {
-            id: ProviderID.make(providerID),
-            name: provider.name ?? existing?.name ?? providerID,
-            env: provider.env ?? existing?.env ?? [],
-            options: mergeDeep(existing?.options ?? {}, provider.options ?? {}),
-            source: "config",
-            models: existing?.models ?? {},
-          }
-
-          for (const [modelID, model] of Object.entries(provider.models ?? {})) {
-            const existingModel = parsed.models[model.id ?? modelID]
-            const apiID = model.id ?? existingModel?.api.id ?? modelID
-            const apiNpm =
-              model.provider?.npm ??
-              provider.npm ??
-              existingModel?.api.npm ??
-              modelsDev[providerID]?.npm ??
-              "@ai-sdk/openai-compatible"
-            const name = iife(() => {
-              if (model.name) return model.name
-              if (model.id && model.id !== modelID) return modelID
-              return existingModel?.name ?? modelID
-            })
-            const parsedModel: Model = {
-              id: ModelID.make(modelID),
-              api: {
-                id: apiID,
-                npm: apiNpm,
-                url: model.provider?.api ?? provider?.api ?? existingModel?.api.url ?? modelsDev[providerID]?.api ?? "",
-              },
-              status: model.status ?? existingModel?.status ?? "active",
-              name,
-              providerID: ProviderID.make(providerID),
-              capabilities: {
-                temperature: model.temperature ?? existingModel?.capabilities.temperature ?? false,
-                reasoning: model.reasoning ?? existingModel?.capabilities.reasoning ?? false,
-                attachment: model.attachment ?? existingModel?.capabilities.attachment ?? false,
-                toolcall: model.tool_call ?? existingModel?.capabilities.toolcall ?? true,
-                input: {
-                  text: model.modalities?.input?.includes("text") ?? existingModel?.capabilities.input.text ?? true,
-                  audio: model.modalities?.input?.includes("audio") ?? existingModel?.capabilities.input.audio ?? false,
-                  image: model.modalities?.input?.includes("image") ?? existingModel?.capabilities.input.image ?? false,
-                  video: model.modalities?.input?.includes("video") ?? existingModel?.capabilities.input.video ?? false,
-                  pdf: model.modalities?.input?.includes("pdf") ?? existingModel?.capabilities.input.pdf ?? false,
-                },
-                output: {
-                  text: model.modalities?.output?.includes("text") ?? existingModel?.capabilities.output.text ?? true,
-                  audio:
-                    model.modalities?.output?.includes("audio") ?? existingModel?.capabilities.output.audio ?? false,
-                  image:
-                    model.modalities?.output?.includes("image") ?? existingModel?.capabilities.output.image ?? false,
-                  video:
-                    model.modalities?.output?.includes("video") ?? existingModel?.capabilities.output.video ?? false,
-                  pdf: model.modalities?.output?.includes("pdf") ?? existingModel?.capabilities.output.pdf ?? false,
-                },
-                interleaved:
-                  model.interleaved ??
-                  existingModel?.capabilities.interleaved ??
-                  (!existingModel && apiNpm === "@ai-sdk/openai-compatible" && apiID.includes("deepseek")
-                    ? { field: "reasoning_content" }
-                    : false),
-              },
-              cost: {
-                input: model?.cost?.input ?? existingModel?.cost?.input ?? 0,
-                output: model?.cost?.output ?? existingModel?.cost?.output ?? 0,
-                cache: {
-                  read: model?.cost?.cache_read ?? existingModel?.cost?.cache.read ?? 0,
-                  write: model?.cost?.cache_write ?? existingModel?.cost?.cache.write ?? 0,
-                },
-              },
-              options: mergeDeep(existingModel?.options ?? {}, model.options ?? {}),
-              limit: {
-                context: model.limit?.context ?? existingModel?.limit?.context ?? 0,
-                input: model.limit?.input ?? existingModel?.limit?.input,
-                output: model.limit?.output ?? existingModel?.limit?.output ?? 0,
-              },
-              headers: mergeDeep(existingModel?.headers ?? {}, model.headers ?? {}),
-              family: model.family ?? existingModel?.family ?? "",
-              release_date: model.release_date ?? existingModel?.release_date ?? "",
-              variants: {},
-            }
-            const merged = mergeDeep(ProviderTransform.variants(parsedModel), model.variants ?? {})
-            parsedModel.variants = mapValues(
-              pickBy(merged, (v) => !v.disabled),
-              (v) => omit(v, ["disabled"]),
-            )
-            parsed.models[modelID] = parsedModel
-          }
-          database[providerID] = parsed
-        }
-
         // load env
         const envs = yield* env.all()
-        for (const [id, provider] of Object.entries(database)) {
+        for (const [id, defaults] of Object.entries(PROVIDER_DEFAULTS)) {
+          const providerID = ProviderID.make(id)
+          if (providers[providerID]) continue
+          if (disabled.has(providerID)) continue
+          if (!defaults.env.some((item) => envs[item])) continue
+          providers[providerID] = makeProvider(providerID, undefined)
+        }
+        for (const [id, provider] of Object.entries(providers)) {
           const providerID = ProviderID.make(id)
           if (disabled.has(providerID)) continue
           const apiKey = provider.env.map((item) => envs[item]).find(Boolean)
@@ -1279,6 +1239,10 @@ const layer: Layer.Layer<
           const providerID = ProviderID.make(id)
           if (disabled.has(providerID)) continue
           if (provider.type === "api") {
+            if (!providers[providerID]) {
+              if (!providerDefaults(providerID)) continue
+              providers[providerID] = makeProvider(providerID, undefined)
+            }
             mergeProvider(providerID, {
               source: "api",
               key: provider.key,
@@ -1286,12 +1250,14 @@ const layer: Layer.Layer<
           }
         }
 
-        // plugin auth loader - database now has entries for config providers
+        // plugin auth loader - only configured providers are eligible
         for (const plugin of plugins) {
           if (!plugin.auth) continue
           const providerID = ProviderID.make(plugin.auth.provider)
           if (disabled.has(providerID)) continue
 
+          const provider = providers[providerID]
+          if (!provider) continue
           const stored = yield* auth.get(providerID).pipe(Effect.orDie)
           if (!stored) continue
           if (!plugin.auth.loader) continue
@@ -1299,7 +1265,7 @@ const layer: Layer.Layer<
           const options = yield* Effect.promise(() =>
             plugin.auth!.loader!(
               () => bridge.promise(auth.get(providerID).pipe(Effect.orDie)) as any,
-              database[plugin.auth!.provider],
+              provider,
             ),
           )
           const opts = options ?? {}
@@ -1310,11 +1276,8 @@ const layer: Layer.Layer<
         for (const [id, fn] of Object.entries(custom(dep))) {
           const providerID = ProviderID.make(id)
           if (disabled.has(providerID)) continue
-          const data = database[providerID]
-          if (!data) {
-            log.error("Provider does not exist in model list " + providerID)
-            continue
-          }
+          const data = providers[providerID]
+          if (!data) continue
           const result = yield* fn(data)
           if (result && (result.autoload || providers[providerID])) {
             if (result.getModel) modelLoaders[providerID] = result.getModel
@@ -1721,7 +1684,6 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Config.defaultLayer),
     Layer.provide(Auth.defaultLayer),
     Layer.provide(Plugin.defaultLayer),
-    Layer.provide(ModelsDev.defaultLayer),
   ),
 )
 

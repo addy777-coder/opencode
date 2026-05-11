@@ -9,7 +9,6 @@ import { Instance } from "../../src/project/instance"
 import { WithInstance } from "../../src/project/with-instance"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
-import { ModelsDev } from "@/provider/models"
 import { ProviderID, ModelID } from "../../src/provider/schema"
 import { Filesystem } from "@/util/filesystem"
 import { tmpdir } from "../fixture/fixture"
@@ -17,6 +16,9 @@ import type { Agent } from "../../src/agent/agent"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { AppRuntime } from "../../src/effect/app-runtime"
+
+type FixtureModel = { id: string } & Record<string, any>
+type FixtureProvider = { models: Record<string, FixtureModel> } & Record<string, any>
 
 async function getModel(providerID: ProviderID, modelID: ModelID) {
   return AppRuntime.runPromise(
@@ -265,7 +267,7 @@ function createChatStream(text: string) {
 
 async function loadFixture(providerID: string, modelID: string) {
   const fixturePath = path.join(import.meta.dir, "../tool/fixtures/models-api.json")
-  const data = await Filesystem.readJson<Record<string, ModelsDev.Provider>>(fixturePath)
+  const data = await Filesystem.readJson<Record<string, FixtureProvider>>(fixturePath)
   const provider = data[providerID]
   if (!provider) {
     throw new Error(`Missing provider in fixture: ${providerID}`)
@@ -275,6 +277,22 @@ async function loadFixture(providerID: string, modelID: string) {
     throw new Error(`Missing model in fixture: ${modelID}`)
   }
   return { provider, model }
+}
+
+function fixtureProviderConfig(
+  fixture: { provider: FixtureProvider; model: FixtureModel },
+  options: Record<string, unknown>,
+) {
+  return {
+    name: fixture.provider.name,
+    env: fixture.provider.env,
+    npm: fixture.provider.npm,
+    api: fixture.provider.api,
+    models: {
+      [fixture.model.id]: fixture.model,
+    },
+    options,
+  }
 }
 
 function createEventStream(chunks: unknown[], includeDone = false) {
@@ -327,12 +345,10 @@ describe("session.llm.stream", () => {
             $schema: "https://opencode.ai/config.json",
             enabled_providers: [providerID],
             provider: {
-              [providerID]: {
-                options: {
+              [providerID]: fixtureProviderConfig(fixture, {
                   apiKey: "test-key",
                   baseURL: `${server.url.origin}/v1`,
-                },
-              },
+              }),
             },
           }),
         )
@@ -414,12 +430,10 @@ describe("session.llm.stream", () => {
             $schema: "https://opencode.ai/config.json",
             enabled_providers: [providerID],
             provider: {
-              [providerID]: {
-                options: {
+              [providerID]: fixtureProviderConfig(fixture, {
                   apiKey: "test-key",
                   baseURL: `${server.url.origin}/v1`,
-                },
-              },
+              }),
             },
           }),
         )
@@ -504,12 +518,10 @@ describe("session.llm.stream", () => {
             $schema: "https://opencode.ai/config.json",
             enabled_providers: [providerID],
             provider: {
-              [providerID]: {
-                options: {
+              [providerID]: fixtureProviderConfig(fixture, {
                   apiKey: "test-key",
                   baseURL: `${server.url.origin}/v1`,
-                },
-              },
+              }),
             },
           }),
         )
@@ -853,12 +865,10 @@ describe("session.llm.stream", () => {
             $schema: "https://opencode.ai/config.json",
             enabled_providers: [providerID],
             provider: {
-              [providerID]: {
-                options: {
+              [providerID]: fixtureProviderConfig(fixture, {
                   apiKey: "test-anthropic-key",
                   baseURL: `${server.url.origin}/v1`,
-                },
-              },
+              }),
             },
           }),
         )
@@ -1212,12 +1222,10 @@ describe("session.llm.stream", () => {
             $schema: "https://opencode.ai/config.json",
             enabled_providers: [providerID],
             provider: {
-              [providerID]: {
-                options: {
+              [providerID]: fixtureProviderConfig(fixture, {
                   apiKey: "test-google-key",
                   baseURL: `${server.url.origin}/v1beta`,
-                },
-              },
+              }),
             },
           }),
         )
