@@ -52,6 +52,7 @@ export type OpenCodeSession = {
   projectName?: string | null
   updatedAt?: number | null
   createdAt?: number | null
+  archivedAt?: number | null
   changedFiles?: number | null
 }
 
@@ -191,6 +192,24 @@ export type OpenCodeCommand = {
   raw: unknown
 }
 
+export type OpenCodeSkill = {
+  name: string
+  description: string
+  location: string
+  content: string
+  enabled: boolean
+}
+
+export type OpenCodeSkillRecommendation = {
+  name: string
+  title: string
+  description: string
+  repo: string
+  path: string
+  refName: string
+  installed: boolean
+}
+
 export type ExecutionOptions = {
   agents: OpenCodeAgent[]
   providers: OpenCodeProvider[]
@@ -280,12 +299,24 @@ export type ThirdPartyProviderApplyInput = {
   baseUrl?: string
   provider: ThirdPartyProviderConfig
   apiKey?: string | null
+  originalProviderId?: string | null
 }
 
 export type ThirdPartyProviderRemoveInput = {
   baseUrl?: string
   providerId: string
 }
+
+export type ThirdPartyProviderAuthStatusInput = {
+  baseUrl?: string
+}
+
+export type ThirdPartyProviderAuthStatus = {
+  stored: boolean
+  type?: string | null
+}
+
+export type ThirdPartyProviderAuthStatusMap = Record<string, ThirdPartyProviderAuthStatus>
 
 export type ThirdPartyProviderModelsInput = {
   requestUrl: string
@@ -298,6 +329,7 @@ export type SessionListInput = {
   baseUrl?: string
   directory?: string
   limit?: number
+  archived?: boolean
 }
 
 export type SessionStatusInput = {
@@ -324,6 +356,13 @@ export type SessionUpdatePermissionInput = {
   directory?: string
   sessionId: string
   permission: PermissionRule[]
+}
+
+export type SessionUpdateArchivedInput = {
+  baseUrl?: string
+  directory?: string
+  sessionId: string
+  archived: boolean
 }
 
 export type SessionForkInput = {
@@ -407,11 +446,51 @@ export type FileSearchInput = {
   limit?: number
 }
 
+export type TextSearchInput = {
+  baseUrl?: string
+  directory?: string
+  pattern: string
+  limit?: number
+}
+
+export type TextSearchSubmatch = {
+  text: string
+  start: number
+  end: number
+}
+
+export type TextSearchMatch = {
+  path: string
+  line: string
+  lineNumber: number
+  absoluteOffset: number
+  submatches: TextSearchSubmatch[]
+  raw: unknown
+}
+
+export type SymbolSearchInput = {
+  baseUrl?: string
+  directory?: string
+  query: string
+  limit?: number
+}
+
+export type OpenCodeSymbol = {
+  name: string
+  kind: number
+  uri?: string | null
+  line?: number | null
+  character?: number | null
+  raw: unknown
+}
+
 export type GitStatusInput = {
+  baseUrl?: string
   directory: string
 }
 
 export type WorkspaceFileDiffInput = {
+  baseUrl?: string
   directory: string
   files: string[]
 }
@@ -426,6 +505,34 @@ export type GitStatus = {
 }
 
 export type CommandListInput = {
+  baseUrl?: string
+  directory?: string
+}
+
+export type SkillListInput = {
+  baseUrl?: string
+  directory?: string
+}
+
+export type SkillInstallInput = {
+  name: string
+  repo?: string
+  path?: string
+  refName?: string
+  baseUrl?: string
+  directory?: string
+}
+
+export type SkillSetEnabledInput = {
+  name: string
+  enabled: boolean
+  baseUrl?: string
+  directory?: string
+}
+
+export type SkillUninstallInput = {
+  name: string
+  location: string
   baseUrl?: string
   directory?: string
 }
@@ -548,6 +655,68 @@ const fallback: AppInitResult = {
   },
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+}
+
+function stringField(value: unknown, key: string) {
+  const field = asRecord(value)?.[key]
+  return typeof field === "string" ? field : undefined
+}
+
+function numberField(value: unknown, key: string) {
+  const field = asRecord(value)?.[key]
+  return typeof field === "number" && Number.isFinite(field) ? field : undefined
+}
+
+function projectNameFromDirectory(directory?: string | null) {
+  return directory?.split(/[\\/]/).filter(Boolean).at(-1) ?? "OpenCode 工作台"
+}
+
+function sessionFromApiValue(value: unknown, input: { sessionId?: string; directory?: string | null }): OpenCodeSession {
+  const record = asRecord(value) ?? {}
+  const time = asRecord(record.time)
+  const summary = asRecord(record.summary)
+  const project = asRecord(record.project)
+  const directory = stringField(record, "directory") ?? input.directory ?? null
+  return {
+    id: stringField(record, "id") ?? input.sessionId ?? "unknown",
+    title: stringField(record, "title")?.trim() || "未命名线程",
+    directory,
+    path: stringField(record, "path"),
+    parentId: stringField(record, "parentID") ?? stringField(record, "parentId"),
+    projectName: stringField(project, "name") ?? stringField(project, "id") ?? projectNameFromDirectory(directory),
+    updatedAt: numberField(time, "updated") ?? numberField(record, "updatedAt"),
+    createdAt: numberField(time, "created") ?? numberField(record, "createdAt"),
+    archivedAt: numberField(time, "archived") ?? numberField(record, "archivedAt") ?? null,
+    changedFiles: numberField(summary, "files") ?? numberField(record, "changedFiles"),
+  }
+}
+
+async function responseError(response: Response) {
+  const body = await response.text().catch(() => "")
+  const preview = body.trim().slice(0, 300)
+  return new Error(`HTTP ${response.status}${preview ? `：${preview}` : ""}`)
+}
+
+async function sessionUpdateArchivedHttp(input: SessionUpdateArchivedInput): Promise<OpenCodeSession> {
+  const baseUrl = input.baseUrl?.trim()
+  if (!baseUrl) throw new Error("OpenCode server 地址为空")
+  const url = new URL(`${baseUrl.replace(/\/+$/, "")}/session/${encodeURIComponent(input.sessionId)}`)
+  if (input.directory?.trim()) url.searchParams.set("directory", input.directory)
+  const archivedAt = input.archived ? Date.now() : null
+  const response = await fetch(url, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ time: { archived: archivedAt } }),
+  })
+  if (!response.ok) throw await responseError(response)
+  const session = sessionFromApiValue(await response.json(), input)
+  if (!input.archived && session.archivedAt) throw new Error("OpenCode server 未清除归档状态")
+  if (input.archived && !session.archivedAt) throw new Error("OpenCode server 未写入归档状态")
+  return session
+}
+
 export async function appInit(): Promise<AppInitResult> {
   if (!hasTauri()) return fallback
   return invoke<AppInitResult>("app_init")
@@ -583,6 +752,7 @@ export async function sessionCreate(input: SessionCreateInput): Promise<OpenCode
       projectName: input.directory?.split(/[\\/]/).filter(Boolean).at(-1) ?? "OpenCode 工作台",
       createdAt: now,
       updatedAt: now,
+      archivedAt: null,
       changedFiles: 0,
     }
   }
@@ -599,6 +769,7 @@ export async function sessionUpdateTitle(input: SessionUpdateTitleInput): Promis
       projectName: input.directory?.split(/[\\/]/).filter(Boolean).at(-1) ?? "OpenCode 工作台",
       createdAt: now,
       updatedAt: now,
+      archivedAt: null,
       changedFiles: 0,
     }
   }
@@ -608,6 +779,34 @@ export async function sessionUpdateTitle(input: SessionUpdateTitleInput): Promis
 export async function sessionUpdatePermission(input: SessionUpdatePermissionInput): Promise<void> {
   if (!hasTauri()) return
   return invoke<void>("session_update_permission", { input })
+}
+
+export async function sessionUpdateArchived(input: SessionUpdateArchivedInput): Promise<OpenCodeSession> {
+  if (!hasTauri()) {
+    if (input.baseUrl) return sessionUpdateArchivedHttp(input)
+    const now = Date.now()
+    return {
+      id: input.sessionId,
+      title: "未命名线程",
+      directory: input.directory,
+      projectName: projectNameFromDirectory(input.directory),
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: input.archived ? now : null,
+      changedFiles: 0,
+    }
+  }
+  try {
+    return await invoke<OpenCodeSession>("session_update_archived", { input })
+  } catch (error) {
+    try {
+      return await sessionUpdateArchivedHttp(input)
+    } catch (fallbackError) {
+      const primary = error instanceof Error ? error.message : String(error)
+      const fallback = fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
+      throw new Error(`Tauri 调用失败：${primary}；HTTP 兜底失败：${fallback}`)
+    }
+  }
 }
 
 export async function sessionFork(input: SessionForkInput): Promise<OpenCodeSession> {
@@ -620,6 +819,7 @@ export async function sessionFork(input: SessionForkInput): Promise<OpenCodeSess
       projectName: input.directory?.split(/[\\/]/).filter(Boolean).at(-1) ?? "OpenCode 工作台",
       createdAt: now,
       updatedAt: now,
+      archivedAt: null,
       changedFiles: 0,
       parentId: input.sessionId,
     }
@@ -690,6 +890,16 @@ export async function fileSearch(input: FileSearchInput): Promise<string[]> {
   return invoke<string[]>("file_search", { input })
 }
 
+export async function textSearch(input: TextSearchInput): Promise<TextSearchMatch[]> {
+  if (!hasTauri()) return []
+  return invoke<TextSearchMatch[]>("text_search", { input })
+}
+
+export async function symbolSearch(input: SymbolSearchInput): Promise<OpenCodeSymbol[]> {
+  if (!hasTauri()) return []
+  return invoke<OpenCodeSymbol[]>("symbol_search", { input })
+}
+
 export async function gitStatus(input: GitStatusInput): Promise<GitStatus | null> {
   if (!hasTauri()) return null
   return invoke<GitStatus | null>("git_status", { input })
@@ -703,6 +913,39 @@ export async function workspaceFileDiffs(input: WorkspaceFileDiffInput): Promise
 export async function commandList(input: CommandListInput): Promise<OpenCodeCommand[]> {
   if (!hasTauri()) return []
   return invoke<OpenCodeCommand[]>("command_list", { input })
+}
+
+export async function skillList(input: SkillListInput): Promise<OpenCodeSkill[]> {
+  if (!hasTauri()) return []
+  return invoke<OpenCodeSkill[]>("skill_list", { input })
+}
+
+export async function skillRecommendations(): Promise<OpenCodeSkillRecommendation[]> {
+  if (!hasTauri()) return []
+  return invoke<OpenCodeSkillRecommendation[]>("skill_recommendations")
+}
+
+export async function skillInstall(input: SkillInstallInput): Promise<OpenCodeSkill> {
+  if (!hasTauri()) {
+    return {
+      name: input.name,
+      description: "",
+      location: "",
+      content: "",
+      enabled: true,
+    }
+  }
+  return invoke<OpenCodeSkill>("skill_install", { input })
+}
+
+export async function skillSetEnabled(input: SkillSetEnabledInput): Promise<void> {
+  if (!hasTauri()) return
+  return invoke<void>("skill_set_enabled", { input })
+}
+
+export async function skillUninstall(input: SkillUninstallInput): Promise<void> {
+  if (!hasTauri()) return
+  return invoke<void>("skill_uninstall", { input })
 }
 
 export async function ptyShells(input: PtyListInput): Promise<PtyShellInfo[]> {
@@ -786,6 +1029,13 @@ export async function thirdPartyProviderApply(input: ThirdPartyProviderApplyInpu
 export async function thirdPartyProviderRemove(input: ThirdPartyProviderRemoveInput): Promise<unknown> {
   if (!hasTauri()) return {}
   return invoke<unknown>("third_party_provider_remove", { input })
+}
+
+export async function thirdPartyProviderAuthStatus(
+  input: ThirdPartyProviderAuthStatusInput,
+): Promise<ThirdPartyProviderAuthStatusMap> {
+  if (!hasTauri()) return {}
+  return invoke<ThirdPartyProviderAuthStatusMap>("third_party_provider_auth_status", { input })
 }
 
 export async function thirdPartyProviderModels(input: ThirdPartyProviderModelsInput): Promise<string[]> {

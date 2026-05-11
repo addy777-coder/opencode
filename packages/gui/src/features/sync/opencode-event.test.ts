@@ -37,6 +37,7 @@ describe("opencode event parsing", () => {
       projectName: null,
       updatedAt: 20,
       createdAt: 10,
+      archivedAt: undefined,
       changedFiles: 3,
     })
   })

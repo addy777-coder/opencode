@@ -1,6 +1,7 @@
 import { File } from "@/file"
 import { Ripgrep } from "@/file/ripgrep"
 import { LSP } from "@/lsp/lsp"
+import { Vcs } from "@/project/vcs"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { Authorization } from "../middleware/authorization"
@@ -29,6 +30,21 @@ export const FindSymbolQuery = Schema.Struct({
   query: Schema.String,
 })
 
+const NonNegativeInteger = Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
+
+export const GitStatus = Schema.Struct({
+  rootPath: Schema.String,
+  branch: Schema.NullOr(Schema.String),
+  detached: Schema.Boolean,
+  dirty: Schema.Boolean,
+  ahead: NonNegativeInteger,
+  behind: NonNegativeInteger,
+}).annotate({ identifier: "GitStatus" })
+
+export const FileDiffPayload = Schema.Struct({
+  files: Schema.optional(Schema.Array(Schema.String)),
+})
+
 export const FilePaths = {
   findText: "/find",
   findFile: "/find/file",
@@ -36,6 +52,8 @@ export const FilePaths = {
   list: "/file",
   content: "/file/content",
   status: "/file/status",
+  gitStatus: "/file/git/status",
+  diff: "/file/diff",
 } as const
 
 export const FileApi = HttpApi.make("file")
@@ -99,6 +117,25 @@ export const FileApi = HttpApi.make("file")
             identifier: "file.status",
             summary: "Get file status",
             description: "Get the git status of all files in the project.",
+          }),
+        ),
+        HttpApiEndpoint.get("gitStatus", FilePaths.gitStatus, {
+          success: described(Schema.NullOr(GitStatus), "Git repository status"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "file.git.status",
+            summary: "Get git repository status",
+            description: "Get the current branch, dirty state, and upstream divergence for the project git repository.",
+          }),
+        ),
+        HttpApiEndpoint.post("diff", FilePaths.diff, {
+          payload: FileDiffPayload,
+          success: described(Schema.Array(Vcs.FileDiff), "Workspace file diffs"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "file.diff",
+            summary: "Get file diffs",
+            description: "Get git patches for changed files in the project.",
           }),
         ),
       )

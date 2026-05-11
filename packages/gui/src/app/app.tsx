@@ -20,9 +20,11 @@ import {
   Copy,
   Edit3,
   ExternalLink,
+  FileText,
   Folder,
   FolderOpen,
   GitBranch,
+  Hash,
   Loader2,
   Mail,
   MailOpen,
@@ -65,6 +67,7 @@ import {
   canApplyThirdPartyProvider,
   thirdPartyProviderRuntimeConfig,
   thirdPartyProviderSignature,
+  type GuiThirdPartyProvider,
 } from "@/features/settings/third-party-api"
 import {
   applyModelPreferences,
@@ -72,13 +75,16 @@ import {
   toggleModelFavoriteKey,
   toggleModelHiddenKey,
 } from "@/features/provider/model-preferences"
+import { chooseSelectableModel, selectedModelExists } from "@/features/provider/model-selection"
 import { buildGuiDeepLink, parseGuiDeepLink, type GuiDeepLinkTarget } from "@/features/deeplink/deep-link"
+import { SkillsWorkspace } from "@/features/skills/skills-workspace"
 import { ThreadWorkspace, type PromptAttachment, type ThreadSummary } from "@/features/thread/thread-workspace"
 import { prefetchWorkspaceBootstrap } from "@/features/sync/bootstrap"
 import {
   applyOpenCodeEventToQueryCache,
   invalidateSessionDiff,
   invalidateSessionMessages,
+  invalidateArchivedSessions,
   invalidateSessions,
 } from "@/features/sync/query-cache"
 import { prefetchSessionMessages } from "@/features/sync/prefetch"
@@ -93,6 +99,8 @@ import { syncQueryKeys } from "@/features/sync/query-keys"
 import {
   appInit,
   commandList,
+  executionOptions,
+  fileSearch,
   gitStatus,
   mcpAdd,
   openPath,
@@ -115,11 +123,15 @@ import {
   sessionMessages,
   sessionPrompt,
   sessionStatus,
+  sessionUpdateArchived,
   sessionUpdatePermission,
   sessionUpdateTitle,
   settingsGet,
   settingsSet,
+  symbolSearch,
   thirdPartyProviderApply,
+  thirdPartyProviderAuthStatus,
+  textSearch,
   subscribeOpenCodeEvent,
   subscribeThreadActivity,
   threadActivityRecent,
@@ -131,14 +143,16 @@ import {
   workspaceOpen,
   workspacePick,
   workspaceRemove,
+  type OpenCodeModel,
   type OpenCodeMessage,
   type OpenCodeSession,
   type PermissionInfo,
   type QuestionInfo,
   type GitStatus,
+  type OpenCodeSymbol,
+  type TextSearchMatch,
   type ThreadActivityItem,
   type WorkspaceRecord,
-  executionOptions,
 } from "@/lib/tauri"
 import { useOutsideClick } from "@/lib/use-outside-click"
 import { cn } from "@/lib/utils"
@@ -155,9 +169,11 @@ const Clock3Icon = Clock3 as IconComponent
 const CopyIcon = Copy as IconComponent
 const Edit3Icon = Edit3 as IconComponent
 const ExternalLinkIcon = ExternalLink as IconComponent
+const FileTextIcon = FileText as IconComponent
 const FolderIcon = Folder as IconComponent
 const FolderOpenIcon = FolderOpen as IconComponent
 const GitBranchIcon = GitBranch as IconComponent
+const HashIcon = Hash as IconComponent
 const Loader2Icon = Loader2 as IconComponent
 const MailIcon = Mail as IconComponent
 const MailOpenIcon = MailOpen as IconComponent
@@ -172,6 +188,15 @@ const SettingsIcon = Settings as IconComponent
 const SlidersHorizontalIcon = SlidersHorizontal as IconComponent
 const Trash2Icon = Trash2 as IconComponent
 const XIcon = X as IconComponent
+
+type UtilitySearchMode = "all" | "files" | "content" | "symbols"
+
+const UTILITY_SEARCH_MODES: Array<{ id: UtilitySearchMode; label: string; icon: IconComponent }> = [
+  { id: "all", label: "全部", icon: SearchIcon },
+  { id: "files", label: "文件", icon: FolderIcon },
+  { id: "content", label: "内容", icon: FileTextIcon },
+  { id: "symbols", label: "符号", icon: HashIcon },
+]
 
 const DEFAULT_SERVER_URL = "http://127.0.0.1:4096"
 const CURRENT_WORKSPACE_KEY = "currentWorkspace"
@@ -209,6 +234,31 @@ type SelectedModel = {
   modelId: string
 }
 
+function modelStatusFromGuiProvider(provider: GuiThirdPartyProvider) {
+  if (!provider.enabled) return "disabled"
+  if (!provider.authStored) return "needs_auth"
+  return "active"
+}
+
+function modelsFromGuiProviders(providers: GuiThirdPartyProvider[]): OpenCodeModel[] {
+  return providers.flatMap((provider) =>
+    provider.models.map((model): OpenCodeModel => ({
+      id: model,
+      name: model,
+      providerId: provider.id,
+      providerName: provider.name,
+      status: modelStatusFromGuiProvider(provider),
+      family: null,
+      context: provider.contextLimit ?? null,
+      input: provider.contextLimit ?? null,
+      output: provider.outputLimit ?? null,
+      supportsReasoning: provider.supportsReasoning,
+      supportsAttachment: provider.supportsAttachment,
+      raw: { source: "gui-settings", provider },
+    })),
+  )
+}
+
 type ConnectServerInput = {
   baseUrl?: string
   mode?: GuiSettings["serverMode"]
@@ -219,13 +269,14 @@ type PrimaryNavItem = {
   label: string
   icon: IconComponent
   shortcut?: string
+  disabled?: boolean
 }
 
 const primaryNav = [
   { id: "new", label: "新对话", icon: Edit3Icon, shortcut: "Ctrl+N" },
   { id: "search", label: "搜索", icon: SearchIcon },
   { id: "skills", label: "技能", icon: BoxIcon },
-  { id: "plugins", label: "插件", icon: BlocksIcon },
+  { id: "plugins", label: "插件", icon: BlocksIcon, disabled: true },
   { id: "automation", label: "自动化", icon: Clock3Icon },
 ] satisfies PrimaryNavItem[]
 
@@ -301,9 +352,11 @@ function SessionRow({
   selected,
   deleteBusy,
   forkBusy,
+  archiveBusy,
   onSelect,
   onRename,
   onStateChange,
+  onArchive,
   onForkLocal,
   onDelete,
 }: {
@@ -312,9 +365,11 @@ function SessionRow({
   selected?: boolean
   deleteBusy?: boolean
   forkBusy?: boolean
+  archiveBusy?: boolean
   onSelect?: () => void
   onRename?: (thread: SidebarThread) => void
   onStateChange?: (thread: SidebarThread, patch: SessionUiFlags) => void
+  onArchive?: (thread: SidebarThread) => void
   onForkLocal?: (thread: SidebarThread) => void
   onDelete?: (thread: SidebarThread) => void
 }) {
@@ -456,9 +511,10 @@ function SessionRow({
           <ProjectContextMenuButton
             icon={ArchiveIcon}
             label={thread.archived ? "取消归档" : "归档对话"}
-            disabled={!canUseSession}
-            title="归档状态保存在当前 GUI 侧边栏中"
-            onClick={() => runContextAction(() => onStateChange?.(thread, { archived: !thread.archived }))}
+            disabled={!canUseSession || !onArchive || archiveBusy}
+            loading={archiveBusy}
+            title="归档状态会同步到 OpenCode 会话"
+            onClick={() => runContextAction(() => onArchive?.(thread))}
           />
           <ProjectContextMenuButton
             icon={thread.unread ? MailOpenIcon : MailIcon}
@@ -857,6 +913,9 @@ export function App() {
   const [projectSortMode, setProjectSortMode] = useState<ProjectSortMode>("recent")
   const [projectOrganizeOpen, setProjectOrganizeOpen] = useState(false)
   const [utilityPanel, setUtilityPanel] = useState<UtilityPanel | null>(null)
+  useEffect(() => {
+    if (utilityPanel === "plugins") setUtilityPanel(null)
+  }, [utilityPanel])
   const [openMenu, setOpenMenu] = useState<AppMenu | null>(null)
   const [renameThreadDraft, setRenameThreadDraft] = useState<RenameThreadDraft | null>(null)
   const titleMenuRegionRef = useRef<HTMLDivElement>(null)
@@ -868,6 +927,7 @@ export function App() {
   const [pendingPromptRefresh, setPendingPromptRefresh] = useState<{ threadId: string; startedAt: number } | null>(null)
   const autoConnectAttempted = useRef(false)
   const mcpApplySignature = useRef<string | null>(null)
+  const thirdPartyAuthStatusSignature = useRef<string | null>(null)
   const thirdPartyApplySignature = useRef<string | null>(null)
   const permissionSettingsMigrationRef = useRef<string | null>(null)
   const deepLinkSignatureRef = useRef<string | null>(null)
@@ -963,6 +1023,10 @@ export function App() {
       }),
     enabled: Boolean(server?.healthy && server?.baseUrl && workspace?.path),
   })
+  const activeSessions = useMemo(
+    () => (sessions.data ?? []).filter((session) => !session.archivedAt),
+    [sessions.data],
+  )
 
   const options = useQuery({
     queryKey: syncQueryKeys.executionOptions(server?.baseUrl, workspace?.path),
@@ -987,9 +1051,15 @@ export function App() {
   })
 
   const currentGitStatus = useQuery<GitStatus | null>({
-    queryKey: ["git-status", workspace?.path, resolvedGuiSettings.gitAutoDetect],
-    queryFn: () => (workspace?.path ? gitStatus({ directory: workspace.path }) : null),
-    enabled: Boolean(resolvedGuiSettings.gitAutoDetect && workspace?.path),
+    queryKey: ["git-status", server?.baseUrl, workspace?.path, resolvedGuiSettings.gitAutoDetect],
+    queryFn: () =>
+      workspace?.path
+        ? gitStatus({
+            baseUrl: server?.baseUrl ?? undefined,
+            directory: workspace.path,
+          })
+        : null,
+    enabled: Boolean(resolvedGuiSettings.gitAutoDetect && server?.healthy && server?.baseUrl && workspace?.path),
     refetchInterval: resolvedGuiSettings.gitAutoDetect ? 5_000 : false,
     refetchOnWindowFocus: true,
     retry: false,
@@ -997,7 +1067,7 @@ export function App() {
   })
 
   const threads = useMemo<ThreadSummary[]>(() => {
-    const sessionThreads = (sessions.data ?? []).map((session) => sessionToThread(session, workspaceName, workspace?.path))
+    const sessionThreads = activeSessions.map((session) => sessionToThread(session, workspaceName, workspace?.path))
     const localThread: ThreadSummary = {
       id: LOCAL_THREAD_ID,
       title: "新对话",
@@ -1013,11 +1083,11 @@ export function App() {
       sessionThreads.length === 0
 
     return shouldShowLocalThread ? [localThread, ...sessionThreads] : sessionThreads
-  }, [activeThreadId, sessions.data, workspace?.path, workspaceName])
+  }, [activeSessions, activeThreadId, sessions.data, workspace?.path, workspaceName])
 
   const activeThread = threads.find((thread) => thread.id === activeThreadId) ?? threads[0]
   const activeRealThread = activeThread && !activeThread.local ? activeThread : null
-  const activeSession = sessions.data?.find((session) => session.id === activeRealThread?.id) ?? null
+  const activeSession = activeSessions.find((session) => session.id === activeRealThread?.id) ?? null
   const activeSessionDirectory =
     activeSession?.directory ??
     activeRealThread?.directory ??
@@ -1080,9 +1150,13 @@ export function App() {
     () => (options.data?.agents ?? []).filter((agent) => !agent.hidden && agent.mode !== "subagent"),
     [options.data?.agents],
   )
+  const guiProviderModels = useMemo(
+    () => modelsFromGuiProviders(resolvedGuiSettings.thirdPartyProviders),
+    [resolvedGuiSettings.thirdPartyProviders],
+  )
   const activeModels = useMemo(
-    () => (options.data?.models ?? []).filter((model) => model.status !== "deprecated"),
-    [options.data?.models],
+    () => guiProviderModels.filter((model) => model.status !== "deprecated"),
+    [guiProviderModels],
   )
   const selectableModels = useMemo(
     () =>
@@ -1099,14 +1173,13 @@ export function App() {
       ) ?? null,
     [resolvedGuiSettings.activeThirdPartyProviderId, resolvedGuiSettings.thirdPartyProviders],
   )
-  const selectedModelProviderAvailable = useMemo(
-    () => Boolean(selectedModel && selectableModels.some((model) => model.providerId === selectedModel.providerId)),
+  const selectedModelStillSelectable = useMemo(
+    () => selectedModelExists(selectableModels, selectedModel),
     [selectableModels, selectedModel],
   )
   const currentModelProviderId =
+    (selectedModelStillSelectable ? selectedModel?.providerId : null) ??
     activeThirdPartyProvider?.id ??
-    (selectedModelProviderAvailable ? selectedModel?.providerId : null) ??
-    options.data?.defaultProviderId ??
     selectableModels[0]?.providerId ??
     null
   const currentProviderModels = useMemo(
@@ -1118,7 +1191,7 @@ export function App() {
   )
   const selectedAgentInfo = selectableAgents.find((agent) => agent.name === selectedAgent) ?? null
   const selectedModelInfo =
-    currentProviderModels.find(
+    selectableModels.find(
       (model) => model.providerId === selectedModel?.providerId && model.id === selectedModel.modelId,
     ) ??
     null
@@ -1266,48 +1339,20 @@ export function App() {
   }, [options.data?.defaultAgent, selectableAgents, selectedAgent])
 
   useEffect(() => {
-    if (!selectableModels.length) return
-
-    if (activeThirdPartyProvider) {
-      const activeProviderModels = selectableModels.filter((model) => model.providerId === activeThirdPartyProvider.id)
-      if (!activeProviderModels.length) {
-        if (selectedModel) setSelectedModel(null)
-        return
-      }
-      if (
-        selectedModel &&
-        activeProviderModels.some((model) => model.providerId === selectedModel.providerId && model.id === selectedModel.modelId)
-      ) {
-        return
-      }
-      const preferred =
-        activeProviderModels.find(
-          (model) => model.id === (activeThirdPartyProvider.defaultModel || activeThirdPartyProvider.models[0]),
-        ) ?? activeProviderModels[0]
-      setSelectedModel({ providerId: preferred.providerId, modelId: preferred.id })
+    const preferred = chooseSelectableModel({
+      models: selectableModels,
+      selectedModel,
+      defaultProviderId: activeThirdPartyProvider?.id ?? null,
+      defaultModelId: activeThirdPartyProvider?.defaultModel || activeThirdPartyProvider?.models[0] || null,
+    })
+    if (!preferred) {
+      if (selectedModel) setSelectedModel(null)
       return
     }
-
-    const fallbackProviderModels = currentModelProviderId
-      ? selectableModels.filter((model) => model.providerId === currentModelProviderId)
-      : selectableModels
-    if (
-      selectedModel &&
-      fallbackProviderModels.some((model) => model.providerId === selectedModel.providerId && model.id === selectedModel.modelId)
-    ) {
-      return
-    }
-    const preferred =
-      fallbackProviderModels.find(
-        (model) =>
-          model.providerId === options.data?.defaultProviderId && model.id === options.data?.defaultModelId,
-      ) ?? fallbackProviderModels[0] ?? selectableModels[0]
+    if (selectedModel?.providerId === preferred.providerId && selectedModel.modelId === preferred.id) return
     setSelectedModel({ providerId: preferred.providerId, modelId: preferred.id })
   }, [
     activeThirdPartyProvider,
-    currentModelProviderId,
-    options.data?.defaultModelId,
-    options.data?.defaultProviderId,
     selectableModels,
     selectedModel,
   ])
@@ -1344,10 +1389,10 @@ export function App() {
   }, [queryClient, server?.baseUrl, server?.healthy, workspace?.path])
 
   useEffect(() => {
-    if (!server?.healthy || !server.baseUrl || !workspace?.path || !sessions.data?.length) return
+    if (!server?.healthy || !server.baseUrl || !workspace?.path || !activeSessions.length) return
     const baseUrl = server.baseUrl
     const activeId = activeRealThread?.id
-    const warm = sessions.data
+    const warm = activeSessions
       .filter((session) => session.id !== activeId)
       .slice(0, 3)
 
@@ -1367,7 +1412,7 @@ export function App() {
           }),
       })
     }
-  }, [activeRealThread?.id, queryClient, server?.baseUrl, server?.healthy, sessions.data, sessions.dataUpdatedAt, workspace?.path])
+  }, [activeRealThread?.id, activeSessions, queryClient, server?.baseUrl, server?.healthy, sessions.dataUpdatedAt, workspace?.path])
 
   useEffect(() => {
     let disposed = false
@@ -1584,6 +1629,48 @@ export function App() {
     },
   })
 
+  const pickWorkspaceForNewThread = useMutation({
+    mutationFn: async () => {
+      const path = await workspacePick()
+      if (!path) return null
+      const saved = await workspaceOpen({ path, name: getPathName(path) })
+      await settingsSet(CURRENT_WORKSPACE_KEY, saved)
+      return saved
+    },
+    onSuccess: (saved) => {
+      if (!saved) return
+      queryClient.setQueryData(["settings", CURRENT_WORKSPACE_KEY], saved)
+      setActiveThreadId(LOCAL_THREAD_ID)
+      setActiveView("workbench")
+      setUtilityPanel(null)
+      void queryClient.invalidateQueries({ queryKey: ["workspaces"] })
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] })
+      void queryClient.invalidateQueries({ queryKey: ["permissions"] })
+      void queryClient.invalidateQueries({ queryKey: ["git-status"] })
+    },
+  })
+
+  const selectWorkspaceForNewThread = useMutation({
+    mutationFn: async (target: WorkspaceRecord) => {
+      const saved = await workspaceOpen({
+        path: target.path,
+        name: target.name ?? getPathName(target.path),
+      })
+      await settingsSet(CURRENT_WORKSPACE_KEY, saved)
+      return saved
+    },
+    onSuccess: (saved) => {
+      queryClient.setQueryData(["settings", CURRENT_WORKSPACE_KEY], saved)
+      setActiveThreadId(LOCAL_THREAD_ID)
+      setActiveView("workbench")
+      setUtilityPanel(null)
+      void queryClient.invalidateQueries({ queryKey: ["workspaces"] })
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] })
+      void queryClient.invalidateQueries({ queryKey: ["permissions"] })
+      void queryClient.invalidateQueries({ queryKey: ["git-status"] })
+    },
+  })
+
   const selectProjectSession = useMutation({
     mutationFn: async (input: { workspace: WorkspaceRecord; sessionId: string }) => {
       await settingsSet(CURRENT_WORKSPACE_KEY, input.workspace)
@@ -1654,6 +1741,38 @@ export function App() {
       )
       setRenameThreadDraft(null)
       void queryClient.invalidateQueries({ queryKey: ["sessions"] })
+    },
+  })
+
+  const archiveThread = useMutation({
+    mutationFn: async (input: { project: WorkspaceRecord; thread: SidebarThread; archived: boolean }) => {
+      if (!server?.healthy) throw new Error("请先连接 OpenCode server")
+      if (!input.thread.id) throw new Error("会话 ID 不存在")
+      const updated = await sessionUpdateArchived({
+        baseUrl: connectedBaseUrl,
+        directory: input.thread.directory ?? input.project.path,
+        sessionId: input.thread.id,
+        archived: input.archived,
+      })
+      return { ...input, updated }
+    },
+    onSuccess: ({ project, thread, archived, updated }) => {
+      queryClient.setQueryData<OpenCodeSession[]>(
+        syncQueryKeys.sessions(server?.baseUrl, project.path),
+        (current) => {
+          if (!current) return current
+          if (archived) return current.filter((session) => session.id !== updated.id)
+          const restored = { ...updated, archivedAt: null }
+          const next = [restored, ...current.filter((session) => session.id !== restored.id)]
+          return next.sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0))
+        },
+      )
+      if (thread.id) {
+        patchSessionUiState(thread.id, { archived: false })
+        if (archived && activeThreadId === thread.id) setActiveThreadId(null)
+      }
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] })
+      invalidateArchivedSessions(queryClient)
     },
   })
 
@@ -1749,6 +1868,60 @@ export function App() {
     server?.healthy,
     workspace?.path,
   ])
+
+  useEffect(() => {
+    if (!server?.healthy || !connectedBaseUrl || !guiSettings.isFetched) return
+    const providers = resolvedGuiSettings.thirdPartyProviders.filter(canApplyThirdPartyProvider)
+    if (!providers.length) return
+
+    const signature = JSON.stringify({
+      baseUrl: connectedBaseUrl,
+      providers: providers.map((provider) => [provider.id, provider.authStored]),
+    })
+    if (thirdPartyAuthStatusSignature.current === signature) return
+    thirdPartyAuthStatusSignature.current = signature
+
+    let disposed = false
+    void thirdPartyProviderAuthStatus({ baseUrl: connectedBaseUrl })
+      .then((status) => {
+        if (disposed) return
+        const current = normalizeGuiSettings(
+          queryClient.getQueryData<Partial<GuiSettings>>(["settings", GUI_SETTINGS_KEY]) ?? resolvedGuiSettings,
+        )
+        let changed = false
+        const nextProviders = current.thirdPartyProviders.map((provider) => {
+          if (!canApplyThirdPartyProvider(provider)) return provider
+          const authStored = Boolean(status[provider.id]?.stored)
+          if (provider.authStored === authStored) return provider
+          changed = true
+          return { ...provider, authStored }
+        })
+        if (!changed) return
+
+        const activeProviderStillUsable = nextProviders.some(
+          (provider) =>
+            provider.id === current.activeThirdPartyProviderId &&
+            provider.enabled &&
+            provider.authStored &&
+            canApplyThirdPartyProvider(provider),
+        )
+        const nextSettings = normalizeGuiSettings({
+          ...current,
+          thirdPartyProviders: nextProviders,
+          activeThirdPartyProviderId: activeProviderStillUsable ? current.activeThirdPartyProviderId : "",
+        })
+        queryClient.setQueryData(["settings", GUI_SETTINGS_KEY], nextSettings)
+        void settingsSet(GUI_SETTINGS_KEY, nextSettings)
+        void queryClient.invalidateQueries({ queryKey: ["execution-options"] })
+      })
+      .catch(() => {
+        thirdPartyAuthStatusSignature.current = null
+      })
+
+    return () => {
+      disposed = true
+    }
+  }, [connectedBaseUrl, guiSettings.isFetched, queryClient, resolvedGuiSettings, server?.healthy])
 
   useEffect(() => {
     if (!server?.healthy || !connectedBaseUrl || !guiSettings.isFetched) return
@@ -1876,6 +2049,22 @@ export function App() {
     })
   }
 
+  function ensureSelectedProviderReady() {
+    if (!selectedModelInfo) {
+      throw new Error("请先到设置 > API 供应商添加供应商、获取模型并选择一个可用模型。")
+    }
+    const provider = resolvedGuiSettings.thirdPartyProviders.find((item) => item.id === selectedModelInfo.providerId)
+    if (!provider) {
+      throw new Error("当前选择的模型不属于 GUI API 供应商，请重新选择模型。")
+    }
+    if (!provider.enabled) {
+      throw new Error(`供应商「${provider.name}」还没有启用，请到设置 > API 供应商启用并应用。`)
+    }
+    if (!provider.authStored) {
+      throw new Error(`供应商「${provider.name}」还没有写入 API Key，请到设置 > API 供应商编辑并应用。`)
+    }
+  }
+
   const createThread = useMutation({
     mutationFn: async (target: WorkspaceRecord) => {
       if (!server?.healthy) throw new Error("请先连接 OpenCode server")
@@ -1944,6 +2133,7 @@ export function App() {
     mutationFn: async (input: { text: string; attachments: PromptAttachment[] }) => {
       if (!server?.healthy) throw new Error("请先连接 OpenCode server")
       if (!workspace?.path) throw new Error("请先选择项目")
+      ensureSelectedProviderReady()
       await ensureBrowserMcp()
 
       let target = activeThread
@@ -2118,6 +2308,7 @@ export function App() {
       })
 
       if (text) {
+        ensureSelectedProviderReady()
         setPendingPromptRefresh({ threadId: session.id, startedAt: Date.now() })
         setRunningSessionIds((current) => {
           const next = new Set(current)
@@ -2286,6 +2477,8 @@ export function App() {
 
   const recentProjects = useMemo(() => recentWorkspaces.data ?? [], [recentWorkspaces.data])
   const workbenchError =
+    pickWorkspaceForNewThread.error ??
+    selectWorkspaceForNewThread.error ??
     createThread.error ??
     forkThread.error ??
     submitPrompt.error ??
@@ -2441,6 +2634,11 @@ export function App() {
     if (!thread.id) return
     renameThread.reset()
     setRenameThreadDraft({ project, thread, value: thread.title })
+  }
+
+  function archiveSidebarThread(project: WorkspaceRecord, thread: SidebarThread) {
+    if (!thread.id) return
+    archiveThread.mutate({ project, thread, archived: !thread.archived })
   }
 
   function deleteSidebarThread(project: WorkspaceRecord, thread: { id?: string; title: string }) {
@@ -2676,18 +2874,24 @@ export function App() {
           <div className="space-y-1 px-2 py-3">
             {primaryNav.map((item) => {
               const Icon = item.icon
-              const selected = item.id === "new" ? !utilityPanel && Boolean(activeThread?.local) : utilityPanel === item.id
+              const disabled = item.disabled
+              const selected = !disabled && (item.id === "new" ? !utilityPanel && Boolean(activeThread?.local) : utilityPanel === item.id)
 
               return (
                 <button
                   key={item.id}
                   className={cn(
                     "flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] font-medium transition-colors",
-                    selected
+                    disabled
+                      ? "cursor-not-allowed text-[var(--app-subtle)] opacity-45"
+                      : selected
                       ? "bg-[var(--app-selected)] text-[var(--app-text)]"
                       : "text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
                   )}
+                  disabled={disabled}
+                  title={disabled ? `${item.label} 暂未开放` : item.label}
                   onClick={() => {
+                    if (disabled) return
                     switchView("workbench")
                     if (item.id === "new") {
                       startNewThread()
@@ -2708,9 +2912,11 @@ export function App() {
             })}
           </div>
 
-          {utilityPanel ? (
+          {utilityPanel && utilityPanel !== "skills" ? (
             <UtilityPanelView
               panel={utilityPanel}
+              baseUrl={connectedBaseUrl}
+              directory={workspace?.path}
               threads={threads}
               workspaces={recentProjects}
               activeThreadId={activeThread?.id}
@@ -2719,13 +2925,14 @@ export function App() {
                 setActiveThreadId(id)
               }}
               onWorkspaceSelect={(item) => selectWorkspace.mutate(item)}
+              onOpenPath={openUserPath}
             />
           ) : null}
 
           <div className="flex items-center gap-1 px-3 pb-1.5 pt-5">
             <button
               type="button"
-              className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-2 py-1 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--app-subtle)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+              className="mr-auto inline-flex h-7 max-w-full items-center gap-1 rounded-md px-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--app-subtle)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
               onClick={toggleProjectSection}
               title={hasExpandedProjects ? "全部收起" : canRestorePreviousProjectGroups ? "恢复之前展开的分组" : "全部展开"}
             >
@@ -2784,7 +2991,9 @@ export function App() {
                   const projectSessions = sidebarSessionQueries[index]
                   const isActiveProject = workspace?.path === item.path
                   const isExpanded = expandedProjectIds.has(item.id)
-                  const projectThreads: SidebarThread[] = (projectSessions.data ?? []).map((session) => {
+                  const projectThreads: SidebarThread[] = (projectSessions.data ?? [])
+                    .filter((session) => !session.archivedAt)
+                    .map((session) => {
                     const state = resolvedSessionUiState[session.id] ?? {}
                     return {
                       id: session.id,
@@ -2793,7 +3002,7 @@ export function App() {
                       changed: session.changedFiles ?? 0,
                       directory: session.directory ?? item.path,
                       pinned: state.pinned,
-                      archived: state.archived,
+                      archived: Boolean(session.archivedAt),
                       unread: state.unread,
                       running:
                         runningSessionIds.has(session.id) ||
@@ -2806,10 +3015,10 @@ export function App() {
                     key={item.id}
                     name={item.name ?? getPathName(item.path)}
                     path={item.path}
-                    selected={isActiveProject && !activeThread}
-                    active={isActiveProject}
+                    selected={!utilityPanel && isActiveProject && !activeThread}
+                    active={!utilityPanel && isActiveProject}
                     expanded={isExpanded}
-                    activeThreadId={activeThread?.id}
+                    activeThreadId={utilityPanel ? undefined : activeThread?.id}
                     loading={projectSessions.isFetching || (isActiveProject && submitPrompt.isPending)}
                     removeBusy={removeWorkspace.isPending && removeWorkspace.variables?.id === item.id}
                     threads={projectThreads}
@@ -2820,6 +3029,7 @@ export function App() {
                     }}
                     onThreadSelect={(id) => selectSidebarThread(item, id)}
                     onThreadRename={(thread) => void renameSidebarThread(item, thread)}
+                    onThreadArchive={(thread) => archiveSidebarThread(item, thread)}
                     onThreadStateChange={(thread, patch) => {
                       if (thread.id) patchSessionUiState(thread.id, patch)
                     }}
@@ -2831,6 +3041,7 @@ export function App() {
                     onRemove={() => removeWorkspace.mutate(item)}
                     deleteBusy={deleteThread.isPending && deleteThread.variables?.workspace.id === item.id}
                     forkBusy={forkThread.isPending && forkThread.variables?.workspace.id === item.id}
+                    archiveBusy={archiveThread.isPending && archiveThread.variables?.project.id === item.id}
                   />
                   )
                 })
@@ -2856,75 +3067,86 @@ export function App() {
         ) : null}
 
         <main className="min-w-0 flex-1 bg-[var(--app-bg)]">
-          <ThreadWorkspace
-            thread={activeThread}
-            server={server}
-            workspace={workspace}
-            activities={activeActivities}
-            messages={threadMessages.data ?? []}
-            diffs={threadDiff.data ?? []}
-            permissions={activePermissions}
-            questions={activeQuestions}
-            agents={selectableAgents}
-            models={currentProviderModels}
-            commands={commands.data ?? []}
-            selectedAgent={selectedAgentInfo}
-            selectedModel={selectedModelInfo}
-            modelProviderName={currentModelProviderName}
-            favoriteModelKeys={resolvedGuiSettings.favoriteModels}
-            hiddenModelKeys={resolvedGuiSettings.hiddenModels}
-            streamingPartText={streamingPartText}
-            gitStatus={resolvedGuiSettings.gitAutoDetect ? currentGitStatus.data ?? null : null}
-            gitLoading={resolvedGuiSettings.gitAutoDetect && currentGitStatus.isLoading}
-            gitAutoDetect={resolvedGuiSettings.gitAutoDetect}
-            isBusy={
-              submitPrompt.isPending ||
-              createThread.isPending ||
-              abortThread.isPending ||
-              forkMessage.isPending ||
-              changePermissionMode.isPending
-            }
-            isRunning={abortableRunning}
-            messagesLoading={threadMessages.isFetching}
-            diffsLoading={threadDiff.isFetching}
-            optionsLoading={options.isFetching}
-            permissionLabel={permissionStatusLabel}
-            permissionMode={activePermissionMode}
-            permissionOptions={permissionOptions}
-            error={workbenchError}
-            onSend={(text, attachments) => submitPrompt.mutateAsync({ text, attachments })}
-            onAbort={() => abortThread.mutateAsync()}
-            onPickWorkspace={() => pickWorkspace.mutate()}
-            onOpenWorkspace={() => {
-              if (workspace?.path) void openPath(workspace.path, { target: "system" })
-            }}
-            onDeleteThread={() => {
-              if (!workspace || !activeRealThread) return Promise.resolve()
-              return deleteThread.mutateAsync({
-                workspace,
-                sessionId: activeRealThread.id,
-                title: activeRealThread.title,
-              })
-            }}
-            onDeleteMessage={(message) => {
-              if (!activeRealThread) return Promise.resolve()
-              return deleteMessage.mutateAsync({ sessionId: activeRealThread.id, messageId: message.id })
-            }}
-            onForkMessage={(message, text, boundaryMessageId) => {
-              if (!activeRealThread) return Promise.resolve()
-              return forkMessage.mutateAsync({ sessionId: activeRealThread.id, message, text, boundaryMessageId })
-            }}
-            onAgentChange={setSelectedAgent}
-            onModelChange={(model) => setSelectedModel({ providerId: model.providerId, modelId: model.id })}
-            onModelFavoriteToggle={toggleModelFavorite}
-            onModelVisibilityToggle={toggleModelHidden}
-            onPermissionModeChange={(mode) => changePermissionMode.mutate(mode as PermissionMode)}
-            onPermissionReply={(permission, reply, message) =>
-              replyPermission.mutateAsync({ permission, reply, message })
-            }
-            onQuestionReply={(question, answers) => replyQuestion.mutateAsync({ question, answers })}
-            onQuestionReject={(question) => rejectQuestion.mutateAsync({ question })}
-          />
+          {utilityPanel === "skills" ? (
+            <SkillsWorkspace
+              server={server}
+              serverUrl={connectedBaseUrl}
+              directory={workspace?.path}
+            />
+          ) : (
+            <ThreadWorkspace
+              thread={activeThread}
+              server={server}
+              workspace={workspace}
+              activities={activeActivities}
+              messages={threadMessages.data ?? []}
+              diffs={threadDiff.data ?? []}
+              permissions={activePermissions}
+              questions={activeQuestions}
+              agents={selectableAgents}
+              models={selectableModels}
+              commands={commands.data ?? []}
+              workspaces={sidebarProjects}
+              selectedAgent={selectedAgentInfo}
+              selectedModel={selectedModelInfo}
+              modelProviderName={selectedModelInfo?.providerName ?? currentModelProviderName}
+              favoriteModelKeys={resolvedGuiSettings.favoriteModels}
+              hiddenModelKeys={resolvedGuiSettings.hiddenModels}
+              streamingPartText={streamingPartText}
+              gitStatus={resolvedGuiSettings.gitAutoDetect ? currentGitStatus.data ?? null : null}
+              gitLoading={resolvedGuiSettings.gitAutoDetect && currentGitStatus.isLoading}
+              gitAutoDetect={resolvedGuiSettings.gitAutoDetect}
+              isBusy={
+                submitPrompt.isPending ||
+                createThread.isPending ||
+                abortThread.isPending ||
+                forkMessage.isPending ||
+                changePermissionMode.isPending
+              }
+              isRunning={abortableRunning}
+              messagesLoading={threadMessages.isFetching}
+              diffsLoading={threadDiff.isFetching}
+              optionsLoading={options.isFetching}
+              workspaceSelecting={pickWorkspaceForNewThread.isPending || selectWorkspaceForNewThread.isPending}
+              permissionLabel={permissionStatusLabel}
+              permissionMode={activePermissionMode}
+              permissionOptions={permissionOptions}
+              error={workbenchError}
+              onSend={(text, attachments) => submitPrompt.mutateAsync({ text, attachments })}
+              onAbort={() => abortThread.mutateAsync()}
+              onPickWorkspace={() => pickWorkspaceForNewThread.mutate()}
+              onWorkspaceSelect={(item) => selectWorkspaceForNewThread.mutate(item)}
+              onOpenWorkspace={() => {
+                if (workspace?.path) void openPath(workspace.path, { target: "system" })
+              }}
+              onDeleteThread={() => {
+                if (!workspace || !activeRealThread) return Promise.resolve()
+                return deleteThread.mutateAsync({
+                  workspace,
+                  sessionId: activeRealThread.id,
+                  title: activeRealThread.title,
+                })
+              }}
+              onDeleteMessage={(message) => {
+                if (!activeRealThread) return Promise.resolve()
+                return deleteMessage.mutateAsync({ sessionId: activeRealThread.id, messageId: message.id })
+              }}
+              onForkMessage={(message, text, boundaryMessageId) => {
+                if (!activeRealThread) return Promise.resolve()
+                return forkMessage.mutateAsync({ sessionId: activeRealThread.id, message, text, boundaryMessageId })
+              }}
+              onAgentChange={setSelectedAgent}
+              onModelChange={(model) => setSelectedModel({ providerId: model.providerId, modelId: model.id })}
+              onModelFavoriteToggle={toggleModelFavorite}
+              onModelVisibilityToggle={toggleModelHidden}
+              onPermissionModeChange={(mode) => changePermissionMode.mutate(mode as PermissionMode)}
+              onPermissionReply={(permission, reply, message) =>
+                replyPermission.mutateAsync({ permission, reply, message })
+              }
+              onQuestionReply={(question, answers) => replyQuestion.mutateAsync({ question, answers })}
+              onQuestionReject={(question) => rejectQuestion.mutateAsync({ question })}
+            />
+          )}
         </main>
       </div>
       )}
@@ -3150,28 +3372,196 @@ function MenuDivider() {
   return <div className="my-1 h-px bg-[var(--app-border)]" />
 }
 
+type UtilityBackendSearchState = {
+  files: string[]
+  text: TextSearchMatch[]
+  symbols: OpenCodeSymbol[]
+  loading: boolean
+  error: string | null
+}
+
+const SEARCH_QUERY_MIN_LENGTH = 2
+
+function modeIncludes(searchMode: UtilitySearchMode, target: Exclude<UtilitySearchMode, "all">) {
+  return searchMode === "all" || searchMode === target
+}
+
+function isAbsoluteUserPath(path: string) {
+  return /^(?:[A-Za-z]:[\\/]|\/|\\)/.test(path)
+}
+
+function resolveWorkspacePath(path: string, directory?: string | null) {
+  const trimmedPath = path.trim()
+  const trimmedDirectory = directory?.trim()
+  if (!trimmedPath || !trimmedDirectory || isAbsoluteUserPath(trimmedPath)) return trimmedPath
+  return `${trimmedDirectory.replace(/[\\/]+$/, "")}/${trimmedPath.replace(/^[\\/]+/, "")}`
+}
+
+function displaySearchPath(path: string, directory?: string | null) {
+  const normalizedPath = path.replace(/\\/g, "/")
+  const normalizedDirectory = directory?.replace(/\\/g, "/").replace(/\/+$/, "")
+  if (normalizedDirectory && normalizedPath.toLowerCase().startsWith(`${normalizedDirectory.toLowerCase()}/`)) {
+    return normalizedPath.slice(normalizedDirectory.length + 1)
+  }
+  return normalizedPath
+}
+
+function symbolUriPath(symbol: OpenCodeSymbol) {
+  const uri = symbol.uri?.trim()
+  if (!uri) return null
+  if (!uri.startsWith("file://")) return uri
+  try {
+    const parsed = new URL(uri)
+    const decoded = decodeURIComponent(parsed.pathname)
+    return /^\/[A-Za-z]:\//.test(decoded) ? decoded.slice(1) : decoded
+  } catch {
+    return uri.replace(/^file:\/\//, "")
+  }
+}
+
+function compactSearchLine(line: string) {
+  return line.replace(/\s+/g, " ").trim() || "空行"
+}
+
+function searchErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error || "搜索失败")
+}
+
+async function settleSearch<T>(promise: Promise<T>, fallback: T): Promise<{ data: T; error: unknown | null }> {
+  try {
+    return { data: await promise, error: null }
+  } catch (error) {
+    return { data: fallback, error }
+  }
+}
+
+function SearchGroupHeader({ label, count }: { label: string; count: number }) {
+  return (
+    <div className="flex h-6 items-center gap-2 px-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--app-subtle)]">
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      <span className="shrink-0 tabular-nums">{count}</span>
+    </div>
+  )
+}
+
+function SearchStatusRow({ loading, text }: { loading?: boolean; text: string }) {
+  return (
+    <div className="flex min-h-9 items-center gap-2 rounded-md px-2 text-[12px] font-medium text-[var(--app-muted)]">
+      {loading ? <Loader2Icon className="h-3.5 w-3.5 shrink-0 animate-spin" /> : null}
+      <span className="min-w-0 truncate">{text}</span>
+    </div>
+  )
+}
+
 function UtilityPanelView({
   panel,
+  baseUrl,
+  directory,
   threads,
   workspaces,
   activeThreadId,
   onThreadSelect,
   onWorkspaceSelect,
+  onOpenPath,
 }: {
   panel: UtilityPanel
+  baseUrl?: string
+  directory?: string | null
   threads: ThreadSummary[]
   workspaces: WorkspaceRecord[]
   activeThreadId?: string
   onThreadSelect: (id: string) => void
   onWorkspaceSelect: (workspace: WorkspaceRecord) => void
+  onOpenPath: (path: string) => void
 }) {
   const [query, setQuery] = useState("")
-  const filteredThreads = threads.filter((thread) => thread.title.toLowerCase().includes(query.toLowerCase())).slice(0, 8)
+  const [searchMode, setSearchMode] = useState<UtilitySearchMode>("all")
+  const [debouncedQuery, setDebouncedQuery] = useState("")
+  const [backendSearch, setBackendSearch] = useState<UtilityBackendSearchState>({
+    files: [],
+    text: [],
+    symbols: [],
+    loading: false,
+    error: null,
+  })
+  const searchRequestId = useRef(0)
+  const normalizedQuery = query.trim()
+  const lowerQuery = normalizedQuery.toLowerCase()
+  const filteredThreads = threads.filter((thread) => thread.title.toLowerCase().includes(lowerQuery)).slice(0, 8)
   const filteredWorkspaces = workspaces
-    .filter((workspace) => `${workspace.name ?? ""} ${workspace.path}`.toLowerCase().includes(query.toLowerCase()))
+    .filter((workspace) => `${workspace.name ?? ""} ${workspace.path}`.toLowerCase().includes(lowerQuery))
     .slice(0, 5)
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(normalizedQuery), 220)
+    return () => window.clearTimeout(timer)
+  }, [normalizedQuery])
+
+  useEffect(() => {
+    if (panel !== "search") return
+
+    const pattern = debouncedQuery.trim()
+    const workspaceDirectory = directory?.trim()
+    const includeFiles = modeIncludes(searchMode, "files")
+    const includeText = modeIncludes(searchMode, "content")
+    const includeSymbols = modeIncludes(searchMode, "symbols")
+
+    if (!workspaceDirectory || pattern.length < SEARCH_QUERY_MIN_LENGTH || (!includeFiles && !includeText && !includeSymbols)) {
+      searchRequestId.current += 1
+      setBackendSearch({ files: [], text: [], symbols: [], loading: false, error: null })
+      return
+    }
+
+    const requestId = searchRequestId.current + 1
+    searchRequestId.current = requestId
+    setBackendSearch((current) => ({ ...current, loading: true, error: null }))
+
+    void (async () => {
+      const [filesResult, textResult, symbolResult] = await Promise.all([
+        includeFiles
+          ? settleSearch(fileSearch({ baseUrl, directory: workspaceDirectory, query: pattern, limit: 24 }), [] as string[])
+          : Promise.resolve({ data: [] as string[], error: null }),
+        includeText
+          ? settleSearch(textSearch({ baseUrl, directory: workspaceDirectory, pattern, limit: 24 }), [] as TextSearchMatch[])
+          : Promise.resolve({ data: [] as TextSearchMatch[], error: null }),
+        includeSymbols
+          ? settleSearch(symbolSearch({ baseUrl, directory: workspaceDirectory, query: pattern, limit: 24 }), [] as OpenCodeSymbol[])
+          : Promise.resolve({ data: [] as OpenCodeSymbol[], error: null }),
+      ])
+
+      if (searchRequestId.current !== requestId) return
+      const errors = [filesResult.error, textResult.error, symbolResult.error].filter(Boolean)
+      setBackendSearch({
+        files: filesResult.data,
+        text: textResult.data,
+        symbols: symbolResult.data,
+        loading: false,
+        error: errors.length ? searchErrorMessage(errors[0]) : null,
+      })
+    })()
+  }, [baseUrl, debouncedQuery, directory, panel, searchMode])
+
   if (panel === "search") {
+    const showLocal = searchMode === "all"
+    const showFiles = modeIncludes(searchMode, "files")
+    const showText = modeIncludes(searchMode, "content")
+    const showSymbols = modeIncludes(searchMode, "symbols")
+    const hasLocalResults = showLocal && (filteredThreads.length > 0 || filteredWorkspaces.length > 0)
+    const hasBackendResults =
+      (showFiles && backendSearch.files.length > 0) ||
+      (showText && backendSearch.text.length > 0) ||
+      (showSymbols && backendSearch.symbols.length > 0)
+    const workspaceDirectory = directory?.trim()
+    const canSearchBackend = Boolean(workspaceDirectory && normalizedQuery.length >= SEARCH_QUERY_MIN_LENGTH)
+    const showWorkspaceHint = !workspaceDirectory && (searchMode !== "all" || normalizedQuery.length >= SEARCH_QUERY_MIN_LENGTH)
+    const showEmpty =
+      !backendSearch.loading &&
+      !backendSearch.error &&
+      normalizedQuery.length >= SEARCH_QUERY_MIN_LENGTH &&
+      !hasLocalResults &&
+      !hasBackendResults &&
+      !showWorkspaceHint
+
     return (
       <div className="border-y border-[var(--app-divider)] px-3 py-3">
         <div className="flex h-9 items-center gap-2 rounded-md border border-[var(--app-border)] bg-[var(--app-input)] px-3">
@@ -3180,33 +3570,161 @@ function UtilityPanelView({
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             className="min-w-0 flex-1 bg-transparent text-sm font-medium text-[var(--app-text)] outline-none placeholder:text-[var(--app-muted)]"
-            placeholder="搜索聊天或项目"
+            placeholder="搜索会话、项目、文件、内容"
           />
+          {backendSearch.loading ? <Loader2Icon className="h-3.5 w-3.5 shrink-0 animate-spin text-[var(--app-muted)]" /> : null}
+          {query ? (
+            <button
+              type="button"
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+              title="清空搜索"
+              onClick={() => setQuery("")}
+            >
+              <XIcon className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
         </div>
-        <div className="mt-3 space-y-1">
-          {filteredThreads.map((thread) => (
-            <button
-              key={thread.id}
-              className={cn(
-                "flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-sm font-medium hover:bg-[var(--app-hover)]",
-                activeThreadId === thread.id ? "text-[var(--app-text)]" : "text-[var(--app-muted)]",
-              )}
-              onClick={() => onThreadSelect(thread.id)}
-            >
-              <span className="min-w-0 flex-1 truncate">{thread.title}</span>
-              <span className="shrink-0 text-xs text-[var(--app-subtle)]">{thread.project}</span>
-            </button>
-          ))}
-          {filteredWorkspaces.map((workspace) => (
-            <button
-              key={workspace.id}
-              className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-sm font-medium text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
-              onClick={() => onWorkspaceSelect(workspace)}
-            >
-              <FolderIcon className="h-4 w-4 shrink-0 text-[var(--app-muted)]" />
-              <span className="min-w-0 flex-1 truncate">{workspace.name ?? getPathName(workspace.path)}</span>
-            </button>
-          ))}
+        <div className="mt-2 grid grid-cols-4 gap-1 rounded-md bg-[var(--app-hover)] p-1">
+          {UTILITY_SEARCH_MODES.map((mode) => {
+            const Icon = mode.icon
+            const selected = searchMode === mode.id
+            return (
+              <button
+                key={mode.id}
+                type="button"
+                className={cn(
+                  "flex h-7 min-w-0 items-center justify-center gap-1 rounded px-1.5 text-[11px] font-semibold transition-colors",
+                  selected
+                    ? "bg-[var(--app-panel)] text-[var(--app-text)] shadow-sm"
+                    : "text-[var(--app-muted)] hover:text-[var(--app-text)]",
+                )}
+                title={mode.label}
+                onClick={() => setSearchMode(mode.id)}
+              >
+                <Icon className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">{mode.label}</span>
+              </button>
+            )
+          })}
+        </div>
+        <div className="mt-3 max-h-[380px] space-y-3 overflow-y-auto pr-1">
+          {showLocal && filteredThreads.length > 0 ? (
+            <div className="space-y-1">
+              <SearchGroupHeader label="会话" count={filteredThreads.length} />
+              {filteredThreads.map((thread) => (
+                <button
+                  key={thread.id}
+                  type="button"
+                  className={cn(
+                    "flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-sm font-medium hover:bg-[var(--app-hover)]",
+                    activeThreadId === thread.id ? "text-[var(--app-text)]" : "text-[var(--app-muted)] hover:text-[var(--app-text)]",
+                  )}
+                  onClick={() => onThreadSelect(thread.id)}
+                >
+                  <MailIcon className="h-3.5 w-3.5 shrink-0 text-[var(--app-subtle)]" />
+                  <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+                  <span className="shrink-0 truncate text-xs text-[var(--app-subtle)]">{thread.project}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {showLocal && filteredWorkspaces.length > 0 ? (
+            <div className="space-y-1">
+              <SearchGroupHeader label="项目" count={filteredWorkspaces.length} />
+              {filteredWorkspaces.map((workspace) => (
+                <button
+                  key={workspace.id}
+                  type="button"
+                  className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-sm font-medium text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+                  onClick={() => onWorkspaceSelect(workspace)}
+                >
+                  <FolderIcon className="h-4 w-4 shrink-0 text-[var(--app-muted)]" />
+                  <span className="min-w-0 flex-1 truncate">{workspace.name ?? getPathName(workspace.path)}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {showFiles && backendSearch.files.length > 0 ? (
+            <div className="space-y-1">
+              <SearchGroupHeader label="文件" count={backendSearch.files.length} />
+              {backendSearch.files.map((path) => (
+                <button
+                  key={`file:${path}`}
+                  type="button"
+                  className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-sm font-medium text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+                  onClick={() => onOpenPath(resolveWorkspacePath(path, workspaceDirectory))}
+                >
+                  <FolderIcon className="h-4 w-4 shrink-0 text-[var(--app-subtle)]" />
+                  <span className="min-w-0 flex-1 truncate">{displaySearchPath(path, workspaceDirectory)}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {showText && backendSearch.text.length > 0 ? (
+            <div className="space-y-1">
+              <SearchGroupHeader label="内容" count={backendSearch.text.length} />
+              {backendSearch.text.map((match) => (
+                <button
+                  key={`text:${match.path}:${match.lineNumber}:${match.absoluteOffset}`}
+                  type="button"
+                  className="flex w-full min-w-0 flex-col gap-0.5 rounded-md px-2 py-2 text-left hover:bg-[var(--app-hover)]"
+                  onClick={() => onOpenPath(resolveWorkspacePath(match.path, workspaceDirectory))}
+                >
+                  <span className="flex w-full min-w-0 items-center gap-2 text-[13px] font-medium text-[var(--app-text)]">
+                    <FileTextIcon className="h-3.5 w-3.5 shrink-0 text-[var(--app-subtle)]" />
+                    <span className="min-w-0 flex-1 truncate">
+                      {displaySearchPath(match.path, workspaceDirectory)}
+                      {match.lineNumber ? `:${match.lineNumber}` : ""}
+                    </span>
+                  </span>
+                  <span className="w-full truncate pl-5 text-[12px] font-medium text-[var(--app-muted)]">
+                    {compactSearchLine(match.line)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {showSymbols && backendSearch.symbols.length > 0 ? (
+            <div className="space-y-1">
+              <SearchGroupHeader label="符号" count={backendSearch.symbols.length} />
+              {backendSearch.symbols.map((symbol, index) => {
+                const path = symbolUriPath(symbol)
+                const displayPath = path ? displaySearchPath(path, workspaceDirectory) : ""
+                return (
+                  <button
+                    key={`symbol:${symbol.name}:${path ?? index}:${symbol.line ?? ""}`}
+                    type="button"
+                    className="flex w-full min-w-0 flex-col gap-0.5 rounded-md px-2 py-2 text-left hover:bg-[var(--app-hover)] disabled:cursor-default disabled:opacity-70"
+                    disabled={!path}
+                    onClick={() => {
+                      if (path) onOpenPath(resolveWorkspacePath(path, workspaceDirectory))
+                    }}
+                  >
+                    <span className="flex w-full min-w-0 items-center gap-2 text-[13px] font-medium text-[var(--app-text)]">
+                      <HashIcon className="h-3.5 w-3.5 shrink-0 text-[var(--app-subtle)]" />
+                      <span className="min-w-0 flex-1 truncate">{symbol.name}</span>
+                    </span>
+                    {displayPath ? (
+                      <span className="w-full truncate pl-5 text-[12px] font-medium text-[var(--app-muted)]">
+                        {displayPath}
+                        {symbol.line ? `:${symbol.line}` : ""}
+                      </span>
+                    ) : null}
+                  </button>
+                )
+              })}
+            </div>
+          ) : null}
+
+          {backendSearch.loading ? <SearchStatusRow loading text="搜索中" /> : null}
+          {backendSearch.error ? <SearchStatusRow text={backendSearch.error} /> : null}
+          {showWorkspaceHint ? <SearchStatusRow text="先选择项目" /> : null}
+          {workspaceDirectory && !canSearchBackend && searchMode !== "all" ? <SearchStatusRow text="输入至少 2 个字符" /> : null}
+          {showEmpty ? <SearchStatusRow text="没有匹配结果" /> : null}
         </div>
       </div>
     )
@@ -3268,6 +3786,7 @@ type ProjectGroupProps = {
   removeBusy?: boolean
   deleteBusy?: boolean
   forkBusy?: boolean
+  archiveBusy?: boolean
   createBusy?: boolean
   createDisabled?: boolean
   threads: SidebarThread[]
@@ -3276,6 +3795,7 @@ type ProjectGroupProps = {
   onThreadSelect?: (id: string) => void
   onThreadRename?: (thread: SidebarThread) => void
   onThreadStateChange?: (thread: SidebarThread, patch: SessionUiFlags) => void
+  onThreadArchive?: (thread: SidebarThread) => void
   onThreadForkLocal?: (thread: SidebarThread) => void
   onThreadDelete?: (thread: SidebarThread) => void
   onCreateThread?: () => void
@@ -3348,10 +3868,10 @@ function ProjectOrganizeMenu({
 
   return (
     <div
-      className="absolute right-0 top-8 z-[70] w-64 overflow-hidden rounded-lg border border-[var(--app-border)] bg-[var(--app-panel)] p-1.5 shadow-2xl shadow-black/35"
+      className="absolute right-0 top-8 z-[70] w-[218px] max-w-[calc(100vw-24px)] overflow-hidden rounded-md border border-[var(--app-border)] bg-[var(--app-panel)] p-1 shadow-xl shadow-black/25"
       data-no-window-drag
     >
-      <div className="px-2 py-1.5 text-xs font-semibold text-[var(--app-subtle)]">整理</div>
+      <div className="px-2 py-1 text-[11px] font-semibold text-[var(--app-subtle)]">整理</div>
       <ProjectOrganizeMenuItem
         icon={Clock3Icon}
         label="最近项目"
@@ -3409,13 +3929,13 @@ function ProjectOrganizeMenuItem({
   return (
     <button
       type="button"
-      className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[13px] font-medium text-[var(--app-text)] transition-colors hover:bg-[var(--app-hover)] disabled:opacity-45 disabled:hover:bg-transparent"
+      className="flex h-7 w-full items-center gap-2 rounded px-2 text-left text-[12px] font-medium text-[var(--app-text)] transition-colors hover:bg-[var(--app-hover)] disabled:opacity-45 disabled:hover:bg-transparent"
       disabled={disabled}
       onClick={onClick}
     >
-      <Icon className="h-4 w-4 shrink-0 text-[var(--app-muted)]" />
+      <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--app-muted)]" />
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {checked ? <CheckIcon className="h-4 w-4 shrink-0 text-[var(--app-text)]" /> : null}
+      {checked ? <CheckIcon className="h-3.5 w-3.5 shrink-0 text-[var(--app-text)]" /> : null}
     </button>
   )
 }
@@ -3431,6 +3951,7 @@ function ProjectGroup({
   removeBusy,
   deleteBusy,
   forkBusy,
+  archiveBusy,
   createBusy,
   createDisabled,
   threads,
@@ -3439,6 +3960,7 @@ function ProjectGroup({
   onThreadSelect,
   onThreadRename,
   onThreadStateChange,
+  onThreadArchive,
   onThreadForkLocal,
   onThreadDelete,
   onCreateThread,
@@ -3596,9 +4118,11 @@ function ProjectGroup({
                 selected={selected}
                 deleteBusy={deleteBusy}
                 forkBusy={forkBusy}
+                archiveBusy={archiveBusy}
                 onSelect={threadId ? () => onThreadSelect?.(threadId) : undefined}
                 onRename={onThreadRename}
                 onStateChange={onThreadStateChange}
+                onArchive={onThreadArchive}
                 onForkLocal={onThreadForkLocal}
                 onDelete={onThreadDelete}
               />

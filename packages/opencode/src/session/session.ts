@@ -239,7 +239,7 @@ export const SetTitleInput = Schema.Struct({ sessionID: SessionID, title: Schema
 )
 export const SetArchivedInput = Schema.Struct({
   sessionID: SessionID,
-  time: Schema.optional(ArchivedTimestamp),
+  time: Schema.optional(Schema.NullOr(ArchivedTimestamp)),
 }).pipe(withStatics((s) => ({ zod: zod(s) })))
 export const SetPermissionInput = Schema.Struct({
   sessionID: SessionID,
@@ -263,6 +263,7 @@ export type ListInput = {
   start?: number
   search?: string
   limit?: number
+  archived?: boolean
 }
 
 const CreatedEventSchema = Schema.Struct({
@@ -406,7 +407,7 @@ export const getUsage = (input: { model: Provider.Model; usage: LanguageModelUsa
         .add(new Decimal(tokens.output).mul(costInfo?.output ?? 0).div(1_000_000))
         .add(new Decimal(tokens.cache.read).mul(costInfo?.cache?.read ?? 0).div(1_000_000))
         .add(new Decimal(tokens.cache.write).mul(costInfo?.cache?.write ?? 0).div(1_000_000))
-        // TODO: update models.dev to have better pricing model, for now:
+        // TODO: add a dedicated pricing field for reasoning tokens; for now:
         // charge reasoning tokens at the same rate as output tokens
         .add(new Decimal(tokens.reasoning).mul(costInfo?.output ?? 0).div(1_000_000))
         .toNumber(),
@@ -437,7 +438,7 @@ export interface Interface {
   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
   readonly get: (id: SessionID) => Effect.Effect<Info, NotFound>
   readonly setTitle: (input: { sessionID: SessionID; title: string }) => Effect.Effect<void>
-  readonly setArchived: (input: { sessionID: SessionID; time?: number }) => Effect.Effect<void>
+  readonly setArchived: (input: { sessionID: SessionID; time?: number | null }) => Effect.Effect<void>
   readonly setPermission: (input: { sessionID: SessionID; permission: Permission.Ruleset }) => Effect.Effect<void>
   readonly setRevert: (input: {
     sessionID: SessionID
@@ -692,7 +693,7 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service | 
       yield* patch(input.sessionID, { title: input.title })
     })
 
-    const setArchived = Effect.fn("Session.setArchived")(function* (input: { sessionID: SessionID; time?: number }) {
+    const setArchived = Effect.fn("Session.setArchived")(function* (input: { sessionID: SessionID; time?: number | null }) {
       yield* patch(input.sessionID, { time: { archived: input.time } })
     })
 
@@ -846,6 +847,9 @@ function* listByProject(
   }
   if (input.search) {
     conditions.push(like(SessionTable.title, `%${input.search}%`))
+  }
+  if (!input.archived) {
+    conditions.push(isNull(SessionTable.time_archived))
   }
 
   const limit = input.limit ?? 100

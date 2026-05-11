@@ -7,6 +7,13 @@ import { Schema, SchemaGetter } from "effect"
 import { HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { Authorization } from "../../middleware/authorization"
 
+const QueryBoolean = Schema.Literals(["true", "false"]).pipe(
+  Schema.decodeTo(Schema.Boolean, {
+    decode: SchemaGetter.transform((value) => value === "true"),
+    encode: SchemaGetter.transform((value) => (value ? "true" : "false")),
+  }),
+)
+
 export const SessionGroup = HttpApiGroup.make("v2.session")
   .add(
     HttpApiEndpoint.get("sessions", "/api/session", {
@@ -27,16 +34,10 @@ export const SessionGroup = HttpApiGroup.make("v2.session")
           directory: Schema.String.pipe(Schema.optional),
           path: Schema.String.pipe(Schema.optional),
           workspace: WorkspaceID.pipe(Schema.optional),
-          roots: Schema.Literals(["true", "false"])
-            .pipe(
-              Schema.decodeTo(Schema.Boolean, {
-                decode: SchemaGetter.transform((value) => value === "true"),
-                encode: SchemaGetter.transform((value) => (value ? "true" : "false")),
-              }),
-            )
-            .pipe(Schema.optional),
+          roots: QueryBoolean.pipe(Schema.optional),
           start: Schema.NumberFromString.pipe(Schema.optional),
           search: Schema.String.pipe(Schema.optional),
+          archived: QueryBoolean.pipe(Schema.optional),
           cursor: Schema.optional(Schema.Never),
         }),
         Schema.Struct({
@@ -60,6 +61,7 @@ export const SessionGroup = HttpApiGroup.make("v2.session")
           roots: Schema.optional(Schema.Never),
           start: Schema.optional(Schema.Never),
           search: Schema.optional(Schema.Never),
+          archived: Schema.optional(Schema.Never),
         }),
       ]).annotate({ identifier: "V2SessionsQuery" }),
       success: Schema.Struct({

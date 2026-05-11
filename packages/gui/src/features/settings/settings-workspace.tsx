@@ -65,6 +65,7 @@ import {
   openPath,
   sessionList,
   sessionMessages,
+  sessionUpdateArchived,
   settingsGet,
   settingsSet,
   type OpenCodeMessage,
@@ -355,7 +356,7 @@ const settingsNav: NavItem[] = [
   { id: "statistics", label: "统计", icon: BarChart3Icon },
   { id: "configuration", label: "配置", icon: WrenchIcon },
   { id: "personalization", label: "个性化", icon: Edit3Icon },
-  { id: "thirdPartyApi", label: "第三方 API", icon: PlugIcon },
+  { id: "thirdPartyApi", label: "API 供应商", icon: PlugIcon },
   { id: "models", label: "模型", icon: StarIcon },
   { id: "mcp", label: "MCP 服务器", icon: BlocksIcon },
   { id: "git", label: "Git", icon: GitBranchIcon },
@@ -1144,7 +1145,14 @@ export function SettingsWorkspace({
       case "computer":
         return <ComputerSettings settings={settings} onChange={updateSettings} />
       case "archived":
-        return <ArchivedSettings settings={settings} onChange={updateSettings} />
+        return (
+          <ArchivedSettings
+            settings={settings}
+            server={server}
+            workspaceDirectory={workspaceDirectory}
+            onChange={updateSettings}
+          />
+        )
       default:
         return null
     }
@@ -3694,7 +3702,7 @@ function apiModelsFromThirdPartyProviders(providers: GuiThirdPartyProvider[]): O
       name: model,
       providerId: provider.id,
       providerName: provider.name,
-      status: provider.enabled ? "active" : "disabled",
+      status: !provider.enabled ? "disabled" : provider.authStored ? "active" : "needs_auth",
       family: null,
       context: provider.contextLimit,
       input: provider.contextLimit,
@@ -3847,7 +3855,7 @@ function ModelSettings({
             })
           ) : (
             <div className="px-5 py-8 text-sm font-medium text-[var(--app-muted)]">
-              {activeModels.length ? "没有匹配的模型" : "在第三方 API 设置里获取模型列表后，可在这里收藏或隐藏模型。"}
+              {activeModels.length ? "没有匹配的模型" : "在 API 供应商设置里获取模型列表后，可在这里收藏或隐藏模型。"}
             </div>
           )}
         </div>
@@ -4344,11 +4352,62 @@ function ComputerSettings({
 
 function ArchivedSettings({
   settings,
+  server,
+  workspaceDirectory,
   onChange,
 }: {
   settings: GuiSettings
+  server?: ServerStatus
+  workspaceDirectory?: string | null
   onChange: (patch: Partial<GuiSettings>) => void
 }) {
+  const queryClient = useQueryClient()
+  const baseUrl = server?.baseUrl ?? settings.serverUrl
+  const serverReady = Boolean(server?.healthy && baseUrl)
+  const archivedSessionsQueryKey = ["archived-sessions", baseUrl, workspaceDirectory] as const
+  const archivedSessions = useQuery({
+    queryKey: archivedSessionsQueryKey,
+    queryFn: async () => {
+      const sessions = await sessionList({
+        baseUrl,
+        directory: workspaceDirectory ?? undefined,
+        limit: 200,
+        archived: true,
+      })
+      return sessions
+        .filter((session) => session.archivedAt)
+        .sort((left, right) => normalizeTimestamp(right.archivedAt, 0) - normalizeTimestamp(left.archivedAt, 0))
+    },
+    enabled: serverReady && Boolean(workspaceDirectory),
+    staleTime: 10_000,
+  })
+  const restoreSession = useMutation({
+    mutationFn: (session: OpenCodeSession) =>
+      sessionUpdateArchived({
+        baseUrl,
+        directory: session.directory ?? workspaceDirectory ?? undefined,
+        sessionId: session.id,
+        archived: false,
+      }),
+    onMutate: async (session) => {
+      await queryClient.cancelQueries({ queryKey: archivedSessionsQueryKey })
+      const previous = queryClient.getQueryData<OpenCodeSession[]>(archivedSessionsQueryKey)
+      queryClient.setQueryData<OpenCodeSession[]>(archivedSessionsQueryKey, (current) =>
+        current?.filter((item) => item.id !== session.id) ?? current,
+      )
+      return { previous }
+    },
+    onError: (_error, _session, context) => {
+      if (context?.previous) queryClient.setQueryData(archivedSessionsQueryKey, context.previous)
+    },
+    onSuccess: () => {
+      void archivedSessions.refetch()
+      void queryClient.invalidateQueries({ queryKey: ["sessions"] })
+      void queryClient.invalidateQueries({ queryKey: ["archived-sessions"] })
+    },
+  })
+  const restoreError = getErrorMessage(restoreSession.error)
+
   return (
     <div className="space-y-8">
       <SettingsSection title="已归档对话">
@@ -4370,12 +4429,81 @@ function ArchivedSettings({
             }
           />
         </div>
-        <div className="mt-4 rounded-lg border border-dashed border-[var(--app-border)] px-4 py-8 text-center text-sm font-medium text-[var(--app-muted)]">
-          暂无已归档对话
+        <div className="mt-4 overflow-hidden rounded-lg border border-[var(--app-border)] bg-[var(--app-panel-2)]">
+          {!serverReady ? (
+            <div className="px-4 py-8 text-center text-sm font-medium text-[var(--app-muted)]">
+              连接 OpenCode server 后显示已归档对话。
+            </div>
+          ) : !workspaceDirectory ? (
+            <div className="px-4 py-8 text-center text-sm font-medium text-[var(--app-muted)]">
+              选择项目后显示该项目的已归档对话。
+            </div>
+          ) : archivedSessions.isLoading ? (
+            <div className="flex items-center justify-center gap-2 px-4 py-8 text-sm font-medium text-[var(--app-muted)]">
+              <Loader2Icon className="h-4 w-4 animate-spin" />
+              正在读取已归档对话
+            </div>
+          ) : archivedSessions.data?.length ? (
+            <div className="divide-y divide-[var(--app-divider)]">
+              {archivedSessions.data.map((session) => (
+                <div key={session.id} className="flex items-center gap-3 px-4 py-3">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[var(--app-hover)] text-[var(--app-muted)]">
+                    <Clock3Icon className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-semibold text-[var(--app-text)]">
+                      {session.title?.trim() || "未命名线程"}
+                    </div>
+                    <div className="mt-0.5 truncate text-[12px] text-[var(--app-muted)]">
+                      {projectNameFromPath(session.directory ?? workspaceDirectory) ?? "当前项目"} · {formatSettingsDate(session.archivedAt)}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--app-border)] px-2.5 text-xs font-semibold text-[var(--app-text)] hover:bg-[var(--app-hover)] disabled:opacity-50"
+                    onClick={() => restoreSession.mutate(session)}
+                    disabled={restoreSession.isPending && restoreSession.variables?.id === session.id}
+                  >
+                    {restoreSession.isPending && restoreSession.variables?.id === session.id ? (
+                      <Loader2Icon className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RotateCcwIcon className="h-3.5 w-3.5" />
+                    )}
+                    {restoreSession.isPending && restoreSession.variables?.id === session.id ? "恢复中" : "恢复"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="px-4 py-8 text-center text-sm font-medium text-[var(--app-muted)]">
+              暂无已归档对话
+            </div>
+          )}
         </div>
+        {archivedSessions.error ? (
+          <div className="mt-3 rounded-md border border-[var(--app-danger-soft)] bg-[var(--app-danger-soft)] px-3 py-2 text-xs text-[var(--app-danger)]">
+            读取失败：{getErrorMessage(archivedSessions.error)}
+          </div>
+        ) : null}
+        {restoreError ? (
+          <div className="mt-3 rounded-md border border-[var(--app-danger-soft)] bg-[var(--app-danger-soft)] px-3 py-2 text-xs text-[var(--app-danger)]">
+            恢复失败：{restoreError}
+          </div>
+        ) : null}
       </SettingsSection>
     </div>
   )
+}
+
+function formatSettingsDate(value?: number | null) {
+  const timestamp = normalizeTimestamp(value, 0)
+  if (!timestamp) return "归档时间未知"
+  return new Intl.DateTimeFormat(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(timestamp))
 }
 
 function ThemeModeButton({

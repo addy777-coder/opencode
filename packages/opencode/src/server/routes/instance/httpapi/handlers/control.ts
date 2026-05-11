@@ -10,11 +10,35 @@ export const controlHandlers = HttpApiBuilder.group(RootHttpApi, "control", (han
   Effect.gen(function* () {
     const auth = yield* Auth.Service
 
+    const authList = Effect.fn("ControlHttpApi.authList")(function* () {
+      const all = yield* auth.all().pipe(Effect.orDie)
+      return Object.fromEntries(
+        Object.entries(all).map(([providerID, info]) => [
+          providerID,
+          {
+            stored: true,
+            type: info.type,
+          },
+        ]),
+      )
+    })
+
     const authSet = Effect.fn("ControlHttpApi.authSet")(function* (ctx: {
       params: { providerID: ProviderID }
       payload: Auth.Info
     }) {
       yield* auth.set(ctx.params.providerID, ctx.payload).pipe(Effect.orDie)
+      return true
+    })
+
+    const authMove = Effect.fn("ControlHttpApi.authMove")(function* (ctx: {
+      params: { providerID: ProviderID; targetProviderID: ProviderID }
+    }) {
+      if (ctx.params.providerID === ctx.params.targetProviderID) return true
+      const existing = yield* auth.get(ctx.params.providerID).pipe(Effect.orDie)
+      if (!existing) return false
+      yield* auth.set(ctx.params.targetProviderID, existing).pipe(Effect.orDie)
+      yield* auth.remove(ctx.params.providerID).pipe(Effect.orDie)
       return true
     })
 
@@ -29,6 +53,11 @@ export const controlHandlers = HttpApiBuilder.group(RootHttpApi, "control", (han
       return true
     })
 
-    return handlers.handle("authSet", authSet).handle("authRemove", authRemove).handle("log", log)
+    return handlers
+      .handle("authList", authList)
+      .handle("authSet", authSet)
+      .handle("authMove", authMove)
+      .handle("authRemove", authRemove)
+      .handle("log", log)
   }),
 )

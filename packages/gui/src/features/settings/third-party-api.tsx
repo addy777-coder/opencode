@@ -144,6 +144,10 @@ export function canApplyThirdPartyProvider(provider: GuiThirdPartyProvider | Thi
   )
 }
 
+export function canUseThirdPartyProviderAsDefault(provider: GuiThirdPartyProvider) {
+  return provider.enabled && provider.authStored && canApplyThirdPartyProvider(provider)
+}
+
 export function thirdPartyProviderRuntimeConfig(provider: GuiThirdPartyProvider): ThirdPartyProviderConfig {
   return {
     id: provider.id.trim(),
@@ -201,20 +205,36 @@ export function ThirdPartyApiSettings({
       if (!provider.authStored && !apiKey) {
         throw new Error("首次应用供应商时需要输入 API Key。")
       }
+      if (apiKey) {
+        await thirdPartyProviderModels({
+          requestUrl: provider.baseUrl,
+          apiKey,
+          protocol: provider.protocol,
+          headers: provider.headers,
+        })
+      }
       await thirdPartyProviderApply({
         baseUrl,
         provider: thirdPartyProviderRuntimeConfig(provider),
         apiKey: apiKey || null,
+        originalProviderId: originalId && originalId !== provider.id ? originalId : null,
       })
       return { provider, originalId: originalId ?? provider.id, usedKey: Boolean(apiKey) }
     },
     onSuccess: ({ provider, originalId, usedKey }) => {
       const savedProvider = normalizeProviderPatch(
-        { ...provider, enabled: true, authStored: provider.authStored || usedKey },
+        { ...provider, authStored: provider.authStored || usedKey },
         {},
       )
       const next = upsertProvider(providers, originalId, savedProvider)
-      onChange({ thirdPartyProviders: next, activeThirdPartyProviderId: savedProvider.id })
+      const previousId = originalId ?? provider.id
+      const wasDefault = activeProviderId === previousId || activeProviderId === provider.id
+      const nextActiveId = wasDefault
+        ? canUseThirdPartyProviderAsDefault(savedProvider)
+          ? savedProvider.id
+          : ""
+        : activeProviderId
+      updateProviders(next, nextActiveId)
       setEditor((current) => {
         if (!current) return current
         if (current.originalId !== originalId && current.provider.id !== provider.id) return current
@@ -222,7 +242,10 @@ export function ThirdPartyApiSettings({
       })
       setDirty(false)
       setApiKeys((current) => ({ ...current, [provider.id]: "", [savedProvider.id]: "" }))
-      setNotice({ tone: "success", text: "已写入 OpenCode provider 配置，模型列表会在刷新后出现。" })
+      setNotice({
+        tone: "success",
+        text: "已写入 OpenCode provider 配置。是否出现在模型选择器、是否作为默认来源，由开关和“设为默认”单独控制。",
+      })
       void queryClient.invalidateQueries({ queryKey: ["execution-options"] })
     },
     onError: (error) => {
@@ -266,9 +289,9 @@ export function ThirdPartyApiSettings({
         protocol: provider.protocol,
         headers: provider.headers,
       })
-      return { provider, models }
+      return { provider, models, usedKey: Boolean(apiKey) }
     },
-    onSuccess: ({ provider, models }) => {
+    onSuccess: ({ provider, models, usedKey }) => {
       const patch = providerPatchFromFetchedModels(provider, models)
       if (editor?.provider.id === provider.id) {
         setEditor((current) =>
@@ -278,7 +301,12 @@ export function ThirdPartyApiSettings({
       } else {
         updateProvider(provider.id, patch)
       }
-      setNotice({ tone: "success", text: `已用 API 返回的 ${models.length} 个模型替换原模型列表，保存或应用后生效。` })
+      setNotice({
+        tone: usedKey ? "warning" : "success",
+        text: usedKey
+          ? `已用 API 返回的 ${models.length} 个模型替换原模型列表。API Key 还没有写入 OpenCode，请点击“应用到 OpenCode”后再使用。`
+          : `已用 API 返回的 ${models.length} 个模型替换原模型列表，保存或应用后生效。`,
+      })
     },
     onError: (error) => {
       setNotice({ tone: "danger", text: getErrorMessage(error) })
@@ -363,7 +391,12 @@ export function ThirdPartyApiSettings({
     updateProviders(next, nextActiveId)
     setEditor({ mode: "edit", originalId: provider.id, provider })
     setDirty(false)
-    setNotice({ tone: "success", text: "供应商配置已保存。" })
+    setNotice({
+      tone: apiKeys[provider.id]?.trim() ? "warning" : "success",
+      text: apiKeys[provider.id]?.trim()
+        ? "供应商配置已保存。API Key 不会通过保存写入 OpenCode，请继续点击“应用到 OpenCode”。"
+        : "供应商配置已保存。",
+    })
     return provider
   }
 
@@ -378,29 +411,25 @@ export function ThirdPartyApiSettings({
     await applyProvider.mutateAsync({ provider, originalId: editor.originalId })
   }
 
-  async function toggleProvider(provider: GuiThirdPartyProvider, enabled: boolean) {
-    if (enabled && !provider.authStored) {
-      setNotice({ tone: "warning", text: "这个供应商还没有保存 API Key，请进入编辑页填写并应用。" })
-      editProvider(provider)
-      return
-    }
-    const nextProvider = { ...provider, enabled }
-    updateProvider(provider.id, { enabled })
-    if (!serverReady) return
-    try {
-      if (enabled) {
-        await applyProvider.mutateAsync({ provider: nextProvider, originalId: provider.id })
-      } else {
-        await thirdPartyProviderRemove({ baseUrl, providerId: provider.id })
-        if (activeProviderId === provider.id) onChange({ activeThirdPartyProviderId: "" })
-        void queryClient.invalidateQueries({ queryKey: ["execution-options"] })
-      }
-    } catch (error) {
-      setNotice({ tone: "danger", text: getErrorMessage(error) })
-    }
+  function toggleProvider(provider: GuiThirdPartyProvider, enabled: boolean) {
+    const next = providers.map((item) => (item.id === provider.id ? normalizeProviderPatch(item, { enabled }) : item))
+    const nextActiveId = !enabled && activeProviderId === provider.id ? "" : activeProviderId
+    updateProviders(next, nextActiveId)
+    setNotice({
+      tone: enabled ? "success" : "warning",
+      text: enabled
+        ? provider.authStored
+          ? "已在 GUI 中启用。它会出现在聊天模型选择器里；需要同步配置时再点击“重新应用”。"
+          : "已在 GUI 中启用。首次使用前还需要填写密钥并应用到 OpenCode。"
+        : "已在 GUI 中停用。它不会作为聊天模型来源；OpenCode 中已写入的密钥不会被删除。",
+    })
   }
 
   function setActive(provider: GuiThirdPartyProvider) {
+    if (!canUseThirdPartyProviderAsDefault(provider)) {
+      setNotice({ tone: "warning", text: "设为默认前，需要先启用供应商，并把密钥应用到 OpenCode。" })
+      return
+    }
     onChange({ activeThirdPartyProviderId: provider.id })
     setNotice({ tone: "success", text: "已设为工作台默认模型来源。发送任务时会优先选择它的默认模型。" })
   }
@@ -423,7 +452,7 @@ export function ThirdPartyApiSettings({
               type="button"
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
               onClick={closeEditor}
-              title="返回第三方 API"
+              title="返回 API 供应商"
             >
               <ArrowLeftIcon className="h-4 w-4" />
             </button>
@@ -488,7 +517,7 @@ export function ThirdPartyApiSettings({
       <section>
         <div className="mb-4 flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <h2 className="text-[15px] font-semibold tracking-tight text-[var(--app-text)]">第三方 API</h2>
+            <h2 className="text-[15px] font-semibold tracking-tight text-[var(--app-text)]">API 供应商</h2>
             <p className="mt-1.5 max-w-[700px] text-[13px] leading-6 text-[var(--app-muted)]">
               这里会写入 OpenCode 的 provider 配置；API Key 交给 OpenCode auth 保存，GUI 设置中只保留供应商、地址和模型。
             </p>
@@ -518,6 +547,8 @@ export function ThirdPartyApiSettings({
                 provider={provider}
                 active={activeProviderId === provider.id}
                 busy={busy}
+                serverReady={serverReady}
+                hasPendingApiKey={Boolean(apiKeys[provider.id]?.trim())}
                 onToggle={(enabled) => void toggleProvider(provider, enabled)}
                 onApply={() => void applyProvider.mutateAsync({ provider, originalId: provider.id })}
                 onSetActive={() => setActive(provider)}
@@ -551,6 +582,8 @@ function ProviderSummaryCard({
   provider,
   active,
   busy,
+  serverReady,
+  hasPendingApiKey,
   onToggle,
   onApply,
   onSetActive,
@@ -560,6 +593,8 @@ function ProviderSummaryCard({
   provider: GuiThirdPartyProvider
   active: boolean
   busy: boolean
+  serverReady: boolean
+  hasPendingApiKey: boolean
   onToggle: (enabled: boolean) => void
   onApply: () => void
   onSetActive: () => void
@@ -568,8 +603,32 @@ function ProviderSummaryCard({
 }) {
   const protocol = PROTOCOL_OPTIONS.find((item) => item.value === provider.protocol) ?? PROTOCOL_OPTIONS[0]
   const valid = canApplyThirdPartyProvider(provider)
-  const applyDisabled = busy || !valid || !provider.authStored
+  const applyHasKey = provider.authStored || hasPendingApiKey
+  const applyNeedsKey = !applyHasKey
+  const applyNeedsEdit = !valid || applyNeedsKey
+  const applyDisabled = busy || (!applyNeedsEdit && !serverReady)
+  const applyLabel = !valid ? "补全配置" : applyNeedsKey ? "填写密钥" : hasPendingApiKey ? "应用密钥" : "重新应用"
+  const canUseAsDefault = canUseThirdPartyProviderAsDefault(provider)
   const defaultModel = provider.defaultModel || provider.models[0] || ""
+  const defaultTitle = !provider.enabled
+    ? "先打开模型选择开关，让它出现在聊天模型选择器里"
+    : !provider.authStored
+      ? "先填写 API Key，并应用到 OpenCode"
+      : !valid
+        ? "请先补全 Base URL 和模型列表"
+        : active
+          ? "已经是默认模型来源"
+          : "设为工作台默认模型来源"
+  const applyTitle = applyNeedsEdit
+    ? "进入编辑页补全配置或填写 API Key"
+    : !serverReady
+      ? "OpenCode 服务未就绪，暂时不能应用"
+      : hasPendingApiKey
+        ? "把当前输入的 API Key 写入 OpenCode auth"
+        : "重新写入 OpenCode provider 配置"
+  const toggleTitle = provider.enabled
+    ? "关闭后不再出现在聊天模型选择器；不会删除 OpenCode 密钥"
+    : "开启后会出现在聊天模型选择器；首次使用仍需要应用密钥"
 
   return (
     <div className="rounded-lg border border-[var(--app-border)] bg-[var(--app-panel-2)] px-4 py-3">
@@ -581,8 +640,15 @@ function ProviderSummaryCard({
           <div className="flex flex-wrap items-center gap-2">
             <div className="truncate text-[15px] font-medium text-[var(--app-text)]">{provider.name || "未命名供应商"}</div>
             {active ? <StatusPill tone="success" text="工作台默认" /> : null}
-            <StatusPill tone="muted" text={provider.enabled ? "已启用" : "已停用"} />
-            {provider.authStored ? <StatusPill tone="muted" text="已保存密钥" /> : null}
+            <StatusPill tone="muted" text={provider.enabled ? "GUI 已启用" : "GUI 已停用"} />
+            {provider.authStored ? (
+              <StatusPill tone="muted" text="OpenCode 已应用" />
+            ) : hasPendingApiKey ? (
+              <StatusPill tone="muted" text="密钥待应用" />
+            ) : (
+              <StatusPill tone="muted" text="需填写密钥" />
+            )}
+            {!valid ? <StatusPill tone="muted" text="配置未完整" /> : null}
           </div>
           <div className="mt-1 truncate text-xs font-medium text-[var(--app-muted)]">
             {protocol.label} · {provider.baseUrl || "未填写 Base URL"}
@@ -598,24 +664,31 @@ function ProviderSummaryCard({
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-          <Switch checked={provider.enabled} onChange={onToggle} />
+          <div
+            className="flex h-8 items-center gap-2 rounded-md border border-[var(--app-border)] bg-[var(--app-input)] px-2.5"
+            title={toggleTitle}
+          >
+            <span className="text-xs font-medium text-[var(--app-muted)]">模型选择</span>
+            <Switch checked={provider.enabled} disabled={busy} title={toggleTitle} onChange={onToggle} />
+          </div>
           <button
             type="button"
             className="flex h-8 items-center gap-2 rounded-md border border-[var(--app-border)] bg-[var(--app-input)] px-2.5 text-xs font-medium text-[var(--app-text)] hover:bg-[var(--app-hover)] disabled:opacity-50"
             onClick={onSetActive}
-            disabled={busy || active || !valid}
+            disabled={busy || active || !canUseAsDefault}
+            title={defaultTitle}
           >
             设为默认
           </button>
           <button
             type="button"
             className="flex h-8 items-center gap-2 rounded-md border border-[var(--app-border)] bg-[var(--app-input)] px-2.5 text-xs font-medium text-[var(--app-text)] hover:bg-[var(--app-hover)] disabled:opacity-50"
-            onClick={onApply}
+            onClick={applyNeedsEdit ? onEdit : onApply}
             disabled={applyDisabled}
-            title={!provider.authStored ? "请先进入编辑页填写 API Key 并应用" : undefined}
+            title={applyTitle}
           >
             {busy ? <Loader2Icon className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2Icon className="h-3.5 w-3.5" />}
-            应用
+            {applyLabel}
           </button>
           <button
             type="button"
@@ -715,10 +788,14 @@ function ProviderEditorForm({
           <div className="min-w-0">
             <div className="text-[13px] font-medium text-[var(--app-text)]">启用供应商</div>
             <div className="mt-0.5 text-[12px] leading-5 text-[var(--app-muted)]">
-              关闭后不会在启动工作台时自动应用。
+              关闭后不会出现在聊天模型选择器；不会清除 OpenCode 中已写入的密钥。
             </div>
           </div>
-          <Switch checked={provider.enabled} onChange={(enabled) => onChange({ enabled })} />
+          <Switch
+            checked={provider.enabled}
+            title="只控制 GUI 是否把这个供应商作为聊天模型来源"
+            onChange={(enabled) => onChange({ enabled })}
+          />
         </div>
 
         {!idValid ? (
@@ -1118,16 +1195,29 @@ function SelectControl({
   )
 }
 
-function Switch({ checked, onChange }: { checked: boolean; onChange: (value: boolean) => void }) {
+function Switch({
+  checked,
+  disabled,
+  title,
+  onChange,
+}: {
+  checked: boolean
+  disabled?: boolean
+  title?: string
+  onChange: (value: boolean) => void
+}) {
   return (
     <button
       type="button"
       className={cn(
-        "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors",
+        "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50",
         checked ? "bg-[var(--app-accent)]" : "bg-[var(--app-hover-strong)]",
       )}
       role="switch"
       aria-checked={checked}
+      aria-label={title ?? "切换状态"}
+      title={title}
+      disabled={disabled}
       onClick={() => onChange(!checked)}
     >
       <span

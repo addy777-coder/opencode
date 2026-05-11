@@ -70,6 +70,7 @@ export interface Interface {
     roots?: boolean
     start?: number
     search?: string
+    archived?: boolean
     cursor?: {
       id: SessionID
       time: number
@@ -165,6 +166,7 @@ export const layer = Layer.effect(
         if (input.roots) conditions.push(isNull(SessionTable.parent_id))
         if (input.start) conditions.push(gte(SessionTable.time_created, input.start))
         if (input.search) conditions.push(like(SessionTable.title, `%${input.search}%`))
+        if (!input.archived) conditions.push(isNull(SessionTable.time_archived))
         if (input.cursor) {
           conditions.push(
             order === "asc"

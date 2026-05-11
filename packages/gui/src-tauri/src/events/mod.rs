@@ -222,7 +222,9 @@ fn map_activity(envelope: &OpenCodeEventEnvelope) -> Option<ThreadActivityItem> 
                 .map(ToOwned::to_owned),
         )),
         "session.created" | "session.updated" | "session.deleted" => None,
-        "message.updated" | "message.part.updated" | "message.removed" | "message.part.removed" => None,
+        "message.updated" | "message.part.updated" | "message.removed" | "message.part.removed" => {
+            None
+        }
         "session.status" => {
             let status = data
                 .get("status")

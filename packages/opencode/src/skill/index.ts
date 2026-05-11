@@ -20,8 +20,10 @@ import { Discovery } from "./discovery"
 
 const log = Log.create({ service: "skill" })
 const CLAUDE_EXTERNAL_DIR = ".claude"
+const CODEX_EXTERNAL_DIR = ".codex"
 const AGENTS_EXTERNAL_DIR = ".agents"
 const EXTERNAL_SKILL_PATTERN = "skills/**/SKILL.md"
+const CODEX_PLUGIN_SKILL_PATTERN = "plugins/**/skills/**/SKILL.md"
 const OPENCODE_SKILL_PATTERN = "{skill,skills}/**/SKILL.md"
 const SKILL_PATTERN = "**/SKILL.md"
 
@@ -156,12 +158,16 @@ const discoverSkills = Effect.fnUntraced(function* (
   const externalDirs: string[] = []
   if (!Flag.OPENCODE_DISABLE_EXTERNAL_SKILLS) {
     if (!Flag.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS) externalDirs.push(CLAUDE_EXTERNAL_DIR)
+    externalDirs.push(CODEX_EXTERNAL_DIR)
     externalDirs.push(AGENTS_EXTERNAL_DIR)
 
     for (const dir of externalDirs) {
       const root = path.join(global.home, dir)
       if (!(yield* fsys.isDir(root))) continue
       yield* scan(state, root, EXTERNAL_SKILL_PATTERN, { dot: true, scope: "global" })
+      if (dir === CODEX_EXTERNAL_DIR) {
+        yield* scan(state, root, CODEX_PLUGIN_SKILL_PATTERN, { dot: true, scope: "global" })
+      }
     }
 
     const upDirs = yield* fsys

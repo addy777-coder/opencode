@@ -5,6 +5,7 @@ use crate::state::AppState;
 use crate::storage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -87,6 +88,7 @@ pub struct SessionListInput {
     pub base_url: Option<String>,
     pub directory: Option<String>,
     pub limit: Option<u32>,
+    pub archived: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,6 +123,15 @@ pub struct SessionUpdatePermissionInput {
     pub directory: Option<String>,
     pub session_id: String,
     pub permission: Vec<opencode::PermissionRule>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionUpdateArchivedInput {
+    pub base_url: Option<String>,
+    pub directory: Option<String>,
+    pub session_id: String,
+    pub archived: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -220,41 +231,76 @@ pub struct FileSearchInput {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TextSearchInput {
+    pub base_url: Option<String>,
+    pub directory: Option<String>,
+    pub pattern: String,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SymbolSearchInput {
+    pub base_url: Option<String>,
+    pub directory: Option<String>,
+    pub query: String,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GitStatusInput {
+    pub base_url: Option<String>,
     pub directory: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceFileDiffInput {
+    pub base_url: Option<String>,
     pub directory: String,
     pub files: Vec<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkspaceFileDiff {
-    pub file: String,
-    pub patch: String,
-    pub additions: u32,
-    pub deletions: u32,
-    pub status: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GitStatus {
-    pub root_path: String,
-    pub branch: Option<String>,
-    pub detached: bool,
-    pub dirty: bool,
-    pub ahead: u32,
-    pub behind: u32,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandListInput {
+    pub base_url: Option<String>,
+    pub directory: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillListInput {
+    pub base_url: Option<String>,
+    pub directory: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillInstallInput {
+    pub name: String,
+    pub repo: Option<String>,
+    pub path: Option<String>,
+    pub ref_name: Option<String>,
+    pub base_url: Option<String>,
+    pub directory: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillSetEnabledInput {
+    pub name: String,
+    pub enabled: bool,
+    pub base_url: Option<String>,
+    pub directory: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillUninstallInput {
+    pub name: String,
+    pub location: String,
     pub base_url: Option<String>,
     pub directory: Option<String>,
 }
@@ -326,6 +372,7 @@ pub struct ThirdPartyProviderApplyInput {
     pub base_url: Option<String>,
     pub provider: opencode::ThirdPartyProviderConfig,
     pub api_key: Option<String>,
+    pub original_provider_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -333,6 +380,12 @@ pub struct ThirdPartyProviderApplyInput {
 pub struct ThirdPartyProviderRemoveInput {
     pub base_url: Option<String>,
     pub provider_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThirdPartyProviderAuthStatusInput {
+    pub base_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -513,6 +566,7 @@ pub async fn session_list(
         &base_url,
         input.directory.as_deref(),
         input.limit.unwrap_or(50),
+        input.archived,
     )
     .await
     .map_err(command_error)
@@ -577,6 +631,22 @@ pub async fn session_update_permission(
         input.directory.as_deref(),
         &input.session_id,
         &input.permission,
+    )
+    .await
+    .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn session_update_archived(
+    input: SessionUpdateArchivedInput,
+    state: State<'_, AppState>,
+) -> Result<opencode::SessionInfo, String> {
+    let base_url = resolve_base_url(input.base_url, &state).await?;
+    opencode::update_session_archived(
+        &base_url,
+        input.directory.as_deref(),
+        &input.session_id,
+        input.archived,
     )
     .await
     .map_err(command_error)
@@ -714,8 +784,8 @@ pub async fn session_diff(
         &input.session_id,
         input.message_id.as_deref(),
     )
-        .await
-        .map_err(command_error)
+    .await
+    .map_err(command_error)
 }
 
 #[tauri::command]
@@ -746,6 +816,38 @@ pub async fn file_search(
 }
 
 #[tauri::command]
+pub async fn text_search(
+    input: TextSearchInput,
+    state: State<'_, AppState>,
+) -> Result<Vec<opencode::TextSearchMatch>, String> {
+    let base_url = resolve_base_url(input.base_url, &state).await?;
+    opencode::find_text(
+        &base_url,
+        input.directory.as_deref(),
+        &input.pattern,
+        input.limit.unwrap_or(20),
+    )
+    .await
+    .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn symbol_search(
+    input: SymbolSearchInput,
+    state: State<'_, AppState>,
+) -> Result<Vec<opencode::SymbolSearchResult>, String> {
+    let base_url = resolve_base_url(input.base_url, &state).await?;
+    opencode::find_symbols(
+        &base_url,
+        input.directory.as_deref(),
+        &input.query,
+        input.limit.unwrap_or(20),
+    )
+    .await
+    .map_err(command_error)
+}
+
+#[tauri::command]
 pub async fn command_list(
     input: CommandListInput,
     state: State<'_, AppState>,
@@ -754,6 +856,74 @@ pub async fn command_list(
     opencode::list_commands(&base_url, input.directory.as_deref())
         .await
         .map_err(command_error)
+}
+
+#[tauri::command]
+pub async fn skill_list(
+    input: SkillListInput,
+    _state: State<'_, AppState>,
+) -> Result<Vec<opencode::SkillInfo>, String> {
+    let mut skills = Vec::new();
+    if let Some(base_url) = input.base_url.filter(|value| !value.trim().is_empty()) {
+        skills.extend(
+            opencode::list_skills(&base_url, input.directory.as_deref())
+                .await
+                .map_err(command_error)?,
+        );
+    }
+    dedupe_and_sort_skills(&mut skills);
+    Ok(skills)
+}
+
+#[tauri::command]
+pub async fn skill_recommendations() -> Result<Vec<opencode::SkillRecommendationInfo>, String> {
+    opencode::list_codex_recommended_skills().await
+}
+
+#[tauri::command]
+pub async fn skill_install(input: SkillInstallInput) -> Result<opencode::SkillInfo, String> {
+    let installed = opencode::install_codex_skill(
+        &input.name,
+        input.repo.as_deref(),
+        input.path.as_deref(),
+        input.ref_name.as_deref(),
+    )
+    .await?;
+    if let Some(base_url) = input
+        .base_url
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        opencode::dispose_instance(base_url, input.directory.as_deref()).await;
+    }
+    Ok(installed)
+}
+
+#[tauri::command]
+pub async fn skill_set_enabled(
+    input: SkillSetEnabledInput,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let base_url = resolve_base_url(input.base_url, &state).await?;
+    opencode::set_skill_enabled(&base_url, &input.name, input.enabled).await?;
+    if !input.enabled {
+        opencode::dispose_instance(&base_url, input.directory.as_deref()).await;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn skill_uninstall(input: SkillUninstallInput) -> Result<(), String> {
+    opencode::uninstall_skill(&input.name, &input.location, input.directory.as_deref())?;
+    if let Some(base_url) = input
+        .base_url
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        let _ = opencode::set_skill_enabled(base_url, &input.name, true).await;
+        opencode::dispose_instance(base_url, input.directory.as_deref()).await;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -881,7 +1051,13 @@ pub async fn third_party_provider_apply(
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     let base_url = resolve_base_url(input.base_url, &state).await?;
-    opencode::apply_third_party_provider(&base_url, &input.provider, input.api_key.as_deref()).await
+    opencode::apply_third_party_provider(
+        &base_url,
+        &input.provider,
+        input.api_key.as_deref(),
+        input.original_provider_id.as_deref(),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -891,6 +1067,15 @@ pub async fn third_party_provider_remove(
 ) -> Result<Value, String> {
     let base_url = resolve_base_url(input.base_url, &state).await?;
     opencode::remove_third_party_provider(&base_url, &input.provider_id).await
+}
+
+#[tauri::command]
+pub async fn third_party_provider_auth_status(
+    input: ThirdPartyProviderAuthStatusInput,
+    state: State<'_, AppState>,
+) -> Result<HashMap<String, opencode::ProviderAuthStatus>, String> {
+    let base_url = resolve_base_url(input.base_url, &state).await?;
+    opencode::provider_auth_status(&base_url).await
 }
 
 #[tauri::command]
@@ -1150,30 +1335,28 @@ pub async fn notify(title: String, body: Option<String>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn git_status(input: GitStatusInput) -> Result<Option<GitStatus>, String> {
-    let dir = PathBuf::from(&input.directory);
-    if !dir.is_dir() {
-        return Ok(None);
-    }
-    // Run the read-only git probes synchronously on a blocking thread —
-    // they're fast (a few ms on a healthy repo) and avoid the complexity
-    // of mixing tokio::process with the rest of the command surface.
-    tokio::task::spawn_blocking(move || compute_git_status(&dir))
+pub async fn git_status(
+    input: GitStatusInput,
+    state: State<'_, AppState>,
+) -> Result<Option<opencode::GitStatus>, String> {
+    let base_url = resolve_base_url(input.base_url, &state).await?;
+    opencode::git_status(&base_url, Some(&input.directory))
         .await
-        .map_err(|err| err.to_string())
+        .map_err(command_error)
 }
 
 #[tauri::command]
 pub async fn workspace_file_diffs(
     input: WorkspaceFileDiffInput,
-) -> Result<Vec<WorkspaceFileDiff>, String> {
-    let dir = PathBuf::from(&input.directory);
-    if !dir.is_dir() || input.files.is_empty() {
+    state: State<'_, AppState>,
+) -> Result<Vec<opencode::DiffFileInfo>, String> {
+    if input.files.is_empty() {
         return Ok(Vec::new());
     }
-    tokio::task::spawn_blocking(move || compute_workspace_file_diffs(&dir, &input.files))
+    let base_url = resolve_base_url(input.base_url, &state).await?;
+    opencode::workspace_file_diffs(&base_url, Some(&input.directory), &input.files)
         .await
-        .map_err(|err| err.to_string())
+        .map_err(command_error)
 }
 
 fn compute_file_tree(input: FileTreeInput) -> Result<Vec<FileTreeEntry>, String> {
@@ -1187,7 +1370,11 @@ fn compute_file_tree(input: FileTreeInput) -> Result<Vec<FileTreeEntry>, String>
         return Err("工作区目录不存在。".to_string());
     }
     let workspace_root = workspace.canonicalize().map_err(command_error)?;
-    let root = match input.root.as_deref().filter(|value| !value.trim().is_empty()) {
+    let root = match input
+        .root
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
         Some(root) => {
             let candidate = PathBuf::from(root);
             if candidate.is_absolute() {
@@ -1215,7 +1402,14 @@ fn compute_file_tree(input: FileTreeInput) -> Result<Vec<FileTreeEntry>, String>
         .unwrap_or(DEFAULT_MAX_ENTRIES)
         .clamp(1, HARD_MAX_ENTRIES);
     let mut entries = Vec::new();
-    collect_file_tree(&workspace_root, &root, 0, max_depth, max_entries, &mut entries)?;
+    collect_file_tree(
+        &workspace_root,
+        &root,
+        0,
+        max_depth,
+        max_entries,
+        &mut entries,
+    )?;
     Ok(entries)
 }
 
@@ -1291,195 +1485,6 @@ fn is_ignored_tree_entry(path: &Path) -> bool {
         name.as_str(),
         ".git" | "node_modules" | "target" | "dist" | ".next" | ".turbo" | ".cache"
     )
-}
-
-fn compute_git_status(dir: &Path) -> Option<GitStatus> {
-    let root = resolve_git_root(dir)?;
-    // `git -C <dir> rev-parse --abbrev-ref HEAD` returns "HEAD" when
-    // detached; otherwise the branch name.
-    let head = run_git(&root, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-    let head_trim = head.trim();
-    let detached = head_trim == "HEAD";
-
-    let branch = if detached {
-        // For detached HEADs, fall back to the short sha so the chip
-        // still shows something useful.
-        run_git(&root, &["rev-parse", "--short", "HEAD"]).map(|sha| sha.trim().to_string())
-    } else if head_trim.is_empty() {
-        None
-    } else {
-        Some(head_trim.to_string())
-    };
-
-    let dirty = run_git(&root, &["status", "--porcelain"])
-        .map(|out| !out.trim().is_empty())
-        .unwrap_or(false);
-
-    let (ahead, behind) = run_git(&root, &["rev-list", "--left-right", "--count", "@{u}...HEAD"])
-        .and_then(|out| {
-            let trimmed = out.trim();
-            let mut parts = trimmed.split_whitespace();
-            let behind: u32 = parts.next()?.parse().ok()?;
-            let ahead: u32 = parts.next()?.parse().ok()?;
-            Some((ahead, behind))
-        })
-        .unwrap_or((0, 0));
-
-    Some(GitStatus {
-        root_path: root.display().to_string(),
-        branch,
-        detached,
-        dirty,
-        ahead,
-        behind,
-    })
-}
-
-fn compute_workspace_file_diffs(dir: &Path, files: &[String]) -> Vec<WorkspaceFileDiff> {
-    let Some(root) = resolve_git_root(dir) else {
-        return Vec::new();
-    };
-
-    files
-        .iter()
-        .filter_map(|file| compute_workspace_file_diff(dir, &root, file))
-        .collect()
-}
-
-fn compute_workspace_file_diff(dir: &Path, root: &Path, file: &str) -> Option<WorkspaceFileDiff> {
-    let input = PathBuf::from(file);
-    let absolute = if input.is_absolute() {
-        input
-    } else {
-        dir.join(input)
-    };
-    let relative = absolute
-        .strip_prefix(root)
-        .ok()
-        .map(|path| path.to_string_lossy().replace('\\', "/"))
-        .unwrap_or_else(|| file.replace('\\', "/"));
-
-    let patch = run_git(
-        root,
-        &[
-            "diff",
-            "--no-ext-diff",
-            "--no-renames",
-            "--unified=100000",
-            "HEAD",
-            "--",
-            &relative,
-        ],
-    )
-    .unwrap_or_default();
-
-    let patch = if patch.trim().is_empty() && absolute.is_file() {
-        run_git_allow_failure(
-            root,
-            &[
-                "diff",
-                "--no-index",
-                "--unified=100000",
-                "--",
-                if cfg!(windows) { "NUL" } else { "/dev/null" },
-                absolute.to_string_lossy().as_ref(),
-            ],
-        )
-        .unwrap_or_default()
-    } else {
-        patch
-    };
-
-    if patch.trim().is_empty() {
-        return None;
-    }
-
-    let (additions, deletions) = diff_stats(&patch);
-    let status = diff_status(&patch).to_string();
-    Some(WorkspaceFileDiff {
-        file: relative,
-        patch,
-        additions,
-        deletions,
-        status,
-    })
-}
-
-fn diff_stats(patch: &str) -> (u32, u32) {
-    let mut additions = 0;
-    let mut deletions = 0;
-    for line in patch.lines() {
-        if line.starts_with("+++") || line.starts_with("---") {
-            continue;
-        }
-        if line.starts_with('+') {
-            additions += 1;
-        }
-        if line.starts_with('-') {
-            deletions += 1;
-        }
-    }
-    (additions, deletions)
-}
-
-fn diff_status(patch: &str) -> &'static str {
-    if patch.contains("\n--- /dev/null") || patch.contains("\n--- NUL") {
-        return "added";
-    }
-    if patch.contains("\n+++ /dev/null") || patch.contains("\n+++ NUL") {
-        return "deleted";
-    }
-    "modified"
-}
-
-fn resolve_git_root(dir: &Path) -> Option<PathBuf> {
-    if let Some(root) = run_git(dir, &["rev-parse", "--show-toplevel"]) {
-        let path = PathBuf::from(root.trim());
-        if path.is_dir() {
-            return Some(path);
-        }
-    }
-
-    let mut nested_roots = Vec::new();
-    let entries = std::fs::read_dir(dir).ok()?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() && path.join(".git").exists() {
-            nested_roots.push(path);
-        }
-    }
-
-    if nested_roots.len() == 1 {
-        nested_roots.pop()
-    } else {
-        None
-    }
-}
-
-fn run_git(dir: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-fn run_git_allow_failure(dir: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .ok()?;
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    if stdout.trim().is_empty() {
-        None
-    } else {
-        Some(stdout)
-    }
 }
 
 fn playwright_browsers_default_path() -> Result<PathBuf, String> {
@@ -1652,6 +1657,24 @@ fn powershell_quote(value: &str) -> String {
 
 fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
+}
+
+fn dedupe_and_sort_skills(skills: &mut Vec<opencode::SkillInfo>) {
+    let mut seen = HashSet::new();
+    skills.retain(|skill| {
+        let key = format!(
+            "{}\n{}",
+            skill.name.to_lowercase(),
+            skill.location.to_lowercase()
+        );
+        seen.insert(key)
+    });
+    skills.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then_with(|| a.location.to_lowercase().cmp(&b.location.to_lowercase()))
+    });
 }
 
 async fn resolve_base_url(

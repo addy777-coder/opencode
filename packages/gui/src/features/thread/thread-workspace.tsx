@@ -39,6 +39,7 @@ import {
   Pin,
   Plus,
   RefreshCw,
+  Search,
   Send,
   ShieldCheck,
   Square,
@@ -102,6 +103,7 @@ const PencilIcon = Pencil as IconComponent
 const PinIcon = Pin as IconComponent
 const PlusIcon = Plus as IconComponent
 const RefreshCwIcon = RefreshCw as IconComponent
+const SearchIcon = Search as IconComponent
 const SendIcon = Send as IconComponent
 const ShieldCheckIcon = ShieldCheck as IconComponent
 const SquareIcon = Square as IconComponent
@@ -143,6 +145,7 @@ type Props = {
   agents?: OpenCodeAgent[]
   models?: OpenCodeModel[]
   commands?: OpenCodeCommand[]
+  workspaces?: WorkspaceRecord[]
   selectedAgent?: OpenCodeAgent | null
   selectedModel?: OpenCodeModel | null
   modelProviderName?: string | null
@@ -157,6 +160,7 @@ type Props = {
   messagesLoading?: boolean
   diffsLoading?: boolean
   optionsLoading?: boolean
+  workspaceSelecting?: boolean
   permissionLabel?: string
   permissionMode?: string
   permissionOptions?: PermissionComposerOption[]
@@ -164,6 +168,7 @@ type Props = {
   onSend: (text: string, attachments: PromptAttachment[]) => Promise<unknown>
   onAbort: () => Promise<unknown>
   onPickWorkspace?: () => void
+  onWorkspaceSelect?: (workspace: WorkspaceRecord) => void
   onOpenWorkspace?: () => void
   onDeleteThread?: () => Promise<unknown>
   onDeleteMessage?: (message: OpenCodeMessage) => Promise<unknown>
@@ -1142,6 +1147,7 @@ export function ThreadWorkspace({
   agents = [],
   models = [],
   commands = [],
+  workspaces = [],
   selectedAgent,
   selectedModel,
   modelProviderName,
@@ -1155,6 +1161,7 @@ export function ThreadWorkspace({
   isRunning = false,
   messagesLoading = false,
   optionsLoading = false,
+  workspaceSelecting = false,
   permissionLabel = "工作区权限",
   permissionMode,
   permissionOptions = [],
@@ -1162,6 +1169,7 @@ export function ThreadWorkspace({
   onSend,
   onAbort,
   onPickWorkspace,
+  onWorkspaceSelect,
   onOpenWorkspace,
   onDeleteThread,
   onDeleteMessage,
@@ -1195,6 +1203,7 @@ export function ThreadWorkspace({
   const [optimisticMessages, setOptimisticMessages] = useState<OpenCodeMessage[]>([])
   const [pendingGuides, setPendingGuides] = useState<PendingGuide[]>([])
   const [guideMenuOpen, setGuideMenuOpen] = useState<string | null>(null)
+  const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false)
   const [interruptedSessionId, setInterruptedSessionId] = useState<string | null>(null)
   const [localThinkingSince, setLocalThinkingSince] = useState<number | null>(null)
   const [progressPinned, setProgressPinned] = useState(false)
@@ -1207,9 +1216,11 @@ export function ThreadWorkspace({
   const composerRef = useRef<HTMLDivElement>(null)
   const headerMenuAnchorRef = useRef<HTMLDivElement>(null)
   const guideMenuAnchorRef = useRef<HTMLDivElement>(null)
+  const workspaceMenuAnchorRef = useRef<HTMLDivElement>(null)
   useOutsideClick(composerRef, () => setOpenMenu(null), Boolean(openMenu))
   useOutsideClick(headerMenuAnchorRef, () => setHeaderMenuOpen(false), headerMenuOpen)
   useOutsideClick(guideMenuAnchorRef, () => setGuideMenuOpen(null), Boolean(guideMenuOpen))
+  useOutsideClick(workspaceMenuAnchorRef, () => setWorkspaceMenuOpen(false), workspaceMenuOpen)
   const normalizedDiffs = useMemo(
     () => normalizeDiffsForWorkspace(diffs, effectiveWorkspaceDirectory),
     [diffs, effectiveWorkspaceDirectory],
@@ -1336,6 +1347,15 @@ export function ThreadWorkspace({
     return messages.filter((message) => messageSessionId(message) === thread.id)
   }, [messages, thread?.id, thread?.local])
   const workspaceLabel = workspace?.name ?? getPathName(workspace?.path)
+  const workspaceOptions = useMemo(() => {
+    const seen = new Set<string>()
+    const add = (item?: WorkspaceRecord | null) => {
+      if (!item?.path || seen.has(item.path)) return []
+      seen.add(item.path)
+      return [item]
+    }
+    return [...workspaces.flatMap(add), ...add(workspace)]
+  }, [workspace, workspaces])
   const hasLiveActivity = scopedActivities.length > 0
   const errorMessage = getErrorMessage(error)
   const visibleError = errorMessage ?? attachmentError
@@ -1501,6 +1521,10 @@ export function ThreadWorkspace({
     () => buildContextUsage(orderedMessages, selectedModel, models),
     [models, orderedMessages, selectedModel],
   )
+
+  useEffect(() => {
+    if (!emptyState) setWorkspaceMenuOpen(false)
+  }, [emptyState])
 
   useEffect(() => {
     const textarea = textareaRef.current
@@ -2061,6 +2085,7 @@ export function ThreadWorkspace({
                           mergedRunBlocks={mergedRunBlocks}
                           hiddenRunBlocks={hiddenRunBlocks}
                           diffs={messageDiffs}
+                          serverBaseUrl={server?.baseUrl ?? null}
                           workspaceDirectory={effectiveWorkspaceDirectory}
                           onLocalFileOpen={openLocalFileInPanel}
                           onLocalFileContextMenu={openLocalFileContextMenu}
@@ -2314,7 +2339,7 @@ export function ThreadWorkspace({
                     onClick={() => setOpenMenu((value) => (value === "model" ? null : "model"))}
                   >
                     <span className="truncate">
-                      {selectedModel ? selectedModel.name : optionsLoading ? "加载模型" : "OpenCode"}
+                      {selectedModel ? selectedModel.name : optionsLoading ? "加载模型" : "未配置模型"}
                     </span>
                     <ChevronDownIcon className="h-4 w-4" />
                   </button>
@@ -2346,6 +2371,34 @@ export function ThreadWorkspace({
                   </div>
                 </div>
               </div>
+              {emptyState ? (
+                <div ref={workspaceMenuAnchorRef} className="relative mt-2 flex justify-start">
+                  <button
+                    type="button"
+                    className="flex h-9 max-w-[300px] items-center gap-2 rounded-md border border-transparent px-2 text-sm font-medium text-[var(--app-muted)] hover:border-[var(--app-border)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] disabled:opacity-50"
+                    title={workspace?.path ?? "选择项目"}
+                    disabled={workspaceSelecting}
+                    onClick={() => setWorkspaceMenuOpen((value) => !value)}
+                  >
+                    {workspaceSelecting ? (
+                      <Loader2Icon className="h-4 w-4 shrink-0 animate-spin" />
+                    ) : (
+                      <FolderOpenIcon className="h-4 w-4 shrink-0" />
+                    )}
+                    <span className="min-w-0 truncate">{workspaceLabel}</span>
+                    <ChevronDownIcon className="h-4 w-4 shrink-0" />
+                  </button>
+                  {workspaceMenuOpen ? (
+                    <ComposerWorkspaceMenu
+                      workspace={workspace}
+                      workspaces={workspaceOptions}
+                      onPickWorkspace={onPickWorkspace}
+                      onWorkspaceSelect={onWorkspaceSelect}
+                      onClose={() => setWorkspaceMenuOpen(false)}
+                    />
+                  ) : null}
+                </div>
+              ) : null}
               {gitAutoDetect ? (
                 <GitBranchStatus
                   status={gitStatus}
@@ -2355,17 +2408,6 @@ export function ThreadWorkspace({
               ) : null}
               {previewAttachment ? (
                 <ImagePreview attachment={previewAttachment} onClose={() => setPreviewAttachment(null)} />
-              ) : null}
-              {emptyState && !workspace?.path && onPickWorkspace ? (
-                <button
-                  type="button"
-                  className="mt-3 flex h-9 items-center gap-2 rounded-md px-2 text-sm font-medium text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
-                  onClick={onPickWorkspace}
-                >
-                  <FolderOpenIcon className="h-4 w-4" />
-                  <span>进入项目工作</span>
-                  <ChevronDownIcon className="h-4 w-4" />
-                </button>
               ) : null}
             </div>
           </div>
@@ -3970,6 +4012,77 @@ function GuideChip({ label }: { label: string }) {
   )
 }
 
+function ComposerWorkspaceMenu({
+  workspace,
+  workspaces,
+  onPickWorkspace,
+  onWorkspaceSelect,
+  onClose,
+}: {
+  workspace?: WorkspaceRecord | null
+  workspaces: WorkspaceRecord[]
+  onPickWorkspace?: () => void
+  onWorkspaceSelect?: (workspace: WorkspaceRecord) => void
+  onClose: () => void
+}) {
+  return (
+    <div
+      className="absolute left-0 top-10 z-30 w-[360px] overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-panel)] shadow-xl shadow-black/30 ring-1 ring-black/5"
+      data-no-window-drag
+    >
+      <div className="border-b border-[var(--app-divider)] px-3 py-2 text-xs font-medium text-[var(--app-muted)]">
+        选择项目
+      </div>
+      <div className="max-h-[260px] overflow-auto p-1.5">
+        {workspaces.length ? (
+          workspaces.map((item) => {
+            const selected = workspace?.path === item.path
+            return (
+              <button
+                key={item.id}
+                type="button"
+                className={cn(
+                  "flex w-full min-w-0 items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm font-medium transition-colors",
+                  selected
+                    ? "bg-[var(--app-selected)] text-[var(--app-text)]"
+                    : "text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
+                )}
+                title={item.path}
+                onClick={() => {
+                  onClose()
+                  if (!selected) onWorkspaceSelect?.(item)
+                }}
+              >
+                <FolderOpenIcon className="h-4 w-4 shrink-0" />
+                <span className="min-w-0 flex-1 truncate">{item.name ?? getPathName(item.path)}</span>
+                {selected ? <CheckCircle2Icon className="h-4 w-4 shrink-0 text-[var(--app-success)]" /> : null}
+              </button>
+            )
+          })
+        ) : (
+          <div className="px-3 py-4 text-sm font-medium text-[var(--app-subtle)]">暂无项目</div>
+        )}
+      </div>
+      {onPickWorkspace ? (
+        <>
+          <div className="h-px bg-[var(--app-divider)]" />
+          <button
+            type="button"
+            className="flex h-10 w-full items-center gap-2 px-3 text-left text-sm font-medium text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+            onClick={() => {
+              onClose()
+              onPickWorkspace()
+            }}
+          >
+            <PlusIcon className="h-4 w-4 shrink-0" />
+            <span>打开本地项目...</span>
+          </button>
+        </>
+      ) : null}
+    </div>
+  )
+}
+
 function CompactionDivider({ label }: { label: string }) {
   return (
     <div className="my-8 flex items-center gap-3 text-[12px] font-semibold text-[var(--app-subtle)]">
@@ -4351,21 +4464,82 @@ function ComposerMenu({
   onModelVisibilityToggle?: (model: OpenCodeModel) => void
   onPermissionModeChange: (mode: string) => void
 }) {
-  const items = models.slice(0, 80)
+  const [modelQuery, setModelQuery] = useState("")
   const favoriteKeys = new Set(favoriteModelKeys)
   const hiddenKeys = new Set(hiddenModelKeys)
+  const providerGroups = useMemo(() => groupModelsByProvider(models), [models])
+  const selectedProviderId = selectedModel?.providerId ?? providerGroups[0]?.id ?? null
+  const [activeProviderId, setActiveProviderId] = useState<string | null>(selectedProviderId)
+  const needle = modelQuery.trim().toLowerCase()
+
+  useEffect(() => {
+    if (kind === "model" && selectedProviderId) setActiveProviderId(selectedProviderId)
+  }, [kind, selectedProviderId])
+
+  const filteredProviderGroups = useMemo(() => {
+    if (!needle) return providerGroups
+    return providerGroups.filter((group) => {
+      const providerMatches = `${group.name} ${group.id}`.toLowerCase().includes(needle)
+      if (providerMatches) return true
+      return group.models.some((model) => modelSearchText(model).includes(needle))
+    })
+  }, [needle, providerGroups])
+
+  useEffect(() => {
+    if (kind !== "model") return
+    if (activeProviderId && filteredProviderGroups.some((group) => group.id === activeProviderId)) return
+    setActiveProviderId(filteredProviderGroups[0]?.id ?? providerGroups[0]?.id ?? null)
+  }, [activeProviderId, filteredProviderGroups, kind, providerGroups])
+
+  const activeProvider =
+    filteredProviderGroups.find((group) => group.id === activeProviderId) ??
+    providerGroups.find((group) => group.id === activeProviderId) ??
+    filteredProviderGroups[0] ??
+    null
+  const providerMatchesQuery = Boolean(
+    activeProvider && needle && `${activeProvider.name} ${activeProvider.id}`.toLowerCase().includes(needle),
+  )
+  const visibleModelItems = activeProvider
+    ? activeProvider.models
+        .filter((model) => !needle || providerMatchesQuery || modelSearchText(model).includes(needle))
+        .sort((left, right) => compareFavoriteModels(left, right, favoriteKeys))
+        .slice(0, 120)
+    : []
 
   return (
     <div
       className={cn(
         "absolute bottom-[54px] z-20 overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-panel)] shadow-xl shadow-black/30 ring-1 ring-black/5",
-        kind === "permission" ? "left-3 w-[330px]" : "right-3 w-[360px]",
+        kind === "permission" ? "left-3 w-[330px]" : "right-3 w-[620px]",
       )}
     >
       <div className="border-b border-[var(--app-divider)] px-3 py-2 text-xs font-medium text-[var(--app-muted)]">
-        {kind === "model" ? (modelProviderName ? `选择 ${modelProviderName} 的模型` : "选择模型") : "选择权限模式"}
+        {kind === "model" ? (modelProviderName ? `选择模型 · 当前 ${modelProviderName}` : "选择模型") : "选择权限模式"}
       </div>
-      <div className="max-h-[320px] overflow-auto p-1.5">
+      {kind === "model" ? (
+        <div className="border-b border-[var(--app-divider)] p-2">
+          <div className="flex h-8 items-center gap-2 rounded-md bg-[var(--app-input)] px-2.5 text-[var(--app-muted)] ring-1 ring-[var(--app-divider)]">
+            <SearchIcon className="h-3.5 w-3.5 shrink-0" />
+            <input
+              value={modelQuery}
+              onChange={(event) => setModelQuery(event.target.value)}
+              className="h-full min-w-0 flex-1 bg-transparent text-xs font-medium text-[var(--app-text)] outline-none placeholder:text-[var(--app-muted)]"
+              placeholder="搜索供应商或模型，例如：小米 / gpt / mimo"
+            />
+            {modelQuery.trim() ? (
+              <button
+                type="button"
+                className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+                title="清除搜索"
+                onClick={() => setModelQuery("")}
+              >
+                <XIcon className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+      <div className={cn("max-h-[320px] overflow-auto p-1.5", kind === "model" && "grid grid-cols-[190px_minmax(0,1fr)] gap-1.5")}>
         {kind === "permission" ? (
           permissionOptions.length ? (
             permissionOptions.map((item) => {
@@ -4402,99 +4576,230 @@ function ComposerMenu({
           ) : (
             <div className="px-3 py-4 text-sm font-medium text-[var(--app-subtle)]">暂无可选权限模式</div>
           )
-        ) : items.length ? (
-          items.map((item) => {
-            const model = item as OpenCodeModel
-            const key = `${model.providerId}/${model.id}`
-            const selected = selectedModel?.providerId === model.providerId && selectedModel.id === model.id
-            const favorite = favoriteKeys.has(key)
-            const hidden = hiddenKeys.has(key)
-            return (
-              <button
-                key={key}
-                className={cn(
-                  "group/model-row w-full rounded-md px-3 py-2 text-left transition-colors",
-                  selected
-                    ? "bg-[var(--app-selected)] text-[var(--app-text)]"
-                    : "text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
-                  hidden && "opacity-55",
-                )}
-                onClick={() => onModelChange(model)}
-              >
-                <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
-                  <span
-                    className={cn(
-                      "flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--app-subtle)]",
-                      favorite && "text-[var(--app-warning)]",
-                    )}
-                  >
-                    <StarIcon className={cn("h-3.5 w-3.5", favorite && "fill-current")} />
-                  </span>
-                  <span className="min-w-0 flex-1 truncate">{model.name}</span>
-                  {model.supportsReasoning ? <span className="text-xs text-[var(--app-accent)]">推理</span> : null}
-                  {onModelFavoriteToggle ? (
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--app-subtle)] opacity-0 transition-opacity hover:bg-[var(--app-hover-strong)] hover:text-[var(--app-text)] group-hover/model-row:opacity-100 group-focus-within/model-row:opacity-100"
-                      title={favorite ? "取消收藏" : "收藏模型"}
-                      onClick={(event) => {
-                        event.preventDefault()
-                        event.stopPropagation()
-                        onModelFavoriteToggle(model)
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key !== "Enter" && event.key !== " ") return
-                        event.preventDefault()
-                        event.stopPropagation()
-                        onModelFavoriteToggle(model)
-                      }}
+        ) : providerGroups.length ? (
+          <>
+            <div className="min-h-0 overflow-auto border-r border-[var(--app-divider)] pr-1">
+              {filteredProviderGroups.length ? (
+                filteredProviderGroups.map((group) => {
+                  const selected = group.id === activeProvider?.id
+                  const status = providerGroupStatus(group)
+                  const statusLabel = providerStatusLabel(group)
+                  return (
+                    <button
+                      key={group.id}
+                      type="button"
+                      className={cn(
+                        "flex h-9 w-full min-w-0 items-center gap-2 rounded-md px-2 text-left text-xs font-medium transition-colors",
+                        selected
+                          ? "bg-[var(--app-selected)] text-[var(--app-text)]"
+                          : "text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
+                      )}
+                      title={`${group.name} (${group.id})`}
+                      onClick={() => setActiveProviderId(group.id)}
                     >
-                      <StarIcon className={cn("h-3.5 w-3.5", favorite && "fill-current text-[var(--app-warning)]")} />
-                    </span>
-                  ) : null}
-                  {onModelVisibilityToggle ? (
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--app-subtle)] opacity-0 transition-opacity hover:bg-[var(--app-hover-strong)] hover:text-[var(--app-text)] group-hover/model-row:opacity-100 group-focus-within/model-row:opacity-100"
-                      title="隐藏模型"
-                      onClick={(event) => {
-                        event.preventDefault()
-                        event.stopPropagation()
-                        onModelVisibilityToggle(model)
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key !== "Enter" && event.key !== " ") return
-                        event.preventDefault()
-                        event.stopPropagation()
-                        onModelVisibilityToggle(model)
-                      }}
+                      <span
+                        className={cn(
+                          "h-1.5 w-1.5 shrink-0 rounded-full",
+                          status === "active"
+                            ? "bg-[var(--app-success)]"
+                            : status === "needs_auth"
+                              ? "bg-[var(--app-warning)]"
+                              : "bg-[var(--app-subtle)]",
+                        )}
+                      />
+                      <span className="min-w-0 flex-1 truncate">{group.name}</span>
+                      {statusLabel ? (
+                        <span className="shrink-0 text-[11px] font-medium text-[var(--app-subtle)]">{statusLabel}</span>
+                      ) : null}
+                      <span className="shrink-0 tabular-nums text-[var(--app-subtle)]">{group.models.length}</span>
+                    </button>
+                  )
+                })
+              ) : (
+                <div className="px-2 py-4 text-xs font-medium text-[var(--app-subtle)]">没有匹配的供应商</div>
+              )}
+            </div>
+            <div className="min-h-0 overflow-auto">
+              {activeProvider ? (
+                <div className="mb-1 flex items-center justify-between gap-2 px-2 py-1">
+                  <div className="min-w-0 truncate text-xs font-semibold text-[var(--app-text)]">{activeProvider.name}</div>
+                  <div className="shrink-0 text-[11px] font-medium text-[var(--app-subtle)]">{activeProvider.id}</div>
+                </div>
+              ) : null}
+              {visibleModelItems.length ? (
+                visibleModelItems.map((model) => {
+                  const key = modelKey(model)
+                  const selected = selectedModel?.providerId === model.providerId && selectedModel.id === model.id
+                  const favorite = favoriteKeys.has(key)
+                  const hidden = hiddenKeys.has(key)
+                  const status = modelStatusLabel(model.status)
+                  return (
+                    <button
+                      key={key}
+                      className={cn(
+                        "group/model-row w-full rounded-md px-3 py-2 text-left transition-colors",
+                        selected
+                          ? "bg-[var(--app-selected)] text-[var(--app-text)]"
+                          : "text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
+                        hidden && "opacity-55",
+                      )}
+                      onClick={() => onModelChange(model)}
                     >
-                      <EyeOffIcon className="h-3.5 w-3.5" />
-                    </span>
-                  ) : null}
-                </div>
-                <div className="mt-1 flex items-center gap-2 text-xs text-[var(--app-muted)]">
-                  <span className="truncate">{model.providerName}</span>
-                  {formatNumber(model.context) ? (
-                    <>
-                      <span className="h-1 w-1 rounded-full bg-[var(--app-dot)]" />
-                      <span>{formatNumber(model.context)}</span>
-                    </>
-                  ) : null}
-                </div>
-              </button>
-            )
-          })
+                      <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+                        <span
+                          className={cn(
+                            "flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--app-subtle)]",
+                            favorite && "text-[var(--app-warning)]",
+                          )}
+                        >
+                          <StarIcon className={cn("h-3.5 w-3.5", favorite && "fill-current")} />
+                        </span>
+                        <span className="min-w-0 flex-1 truncate">{model.name}</span>
+                        {model.supportsReasoning ? <span className="text-xs text-[var(--app-accent)]">推理</span> : null}
+                        {status ? <span className="text-xs text-[var(--app-warning)]">{status}</span> : null}
+                        {onModelFavoriteToggle ? (
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--app-subtle)] opacity-0 transition-opacity hover:bg-[var(--app-hover-strong)] hover:text-[var(--app-text)] group-hover/model-row:opacity-100 group-focus-within/model-row:opacity-100"
+                            title={favorite ? "取消收藏" : "收藏模型"}
+                            onClick={(event) => {
+                              event.preventDefault()
+                              event.stopPropagation()
+                              onModelFavoriteToggle(model)
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key !== "Enter" && event.key !== " ") return
+                              event.preventDefault()
+                              event.stopPropagation()
+                              onModelFavoriteToggle(model)
+                            }}
+                          >
+                            <StarIcon className={cn("h-3.5 w-3.5", favorite && "fill-current text-[var(--app-warning)]")} />
+                          </span>
+                        ) : null}
+                        {onModelVisibilityToggle ? (
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--app-subtle)] opacity-0 transition-opacity hover:bg-[var(--app-hover-strong)] hover:text-[var(--app-text)] group-hover/model-row:opacity-100 group-focus-within/model-row:opacity-100"
+                            title="隐藏模型"
+                            onClick={(event) => {
+                              event.preventDefault()
+                              event.stopPropagation()
+                              onModelVisibilityToggle(model)
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key !== "Enter" && event.key !== " ") return
+                              event.preventDefault()
+                              event.stopPropagation()
+                              onModelVisibilityToggle(model)
+                            }}
+                          >
+                            <EyeOffIcon className="h-3.5 w-3.5" />
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-[var(--app-muted)]">
+                        <span className="truncate">{model.providerName}</span>
+                        {formatNumber(model.context) ? (
+                          <>
+                            <span className="h-1 w-1 rounded-full bg-[var(--app-dot)]" />
+                            <span>{formatNumber(model.context)}</span>
+                          </>
+                        ) : null}
+                      </div>
+                    </button>
+                  )
+                })
+              ) : (
+                <div className="px-3 py-4 text-sm font-medium text-[var(--app-subtle)]">当前供应商暂无匹配模型</div>
+              )}
+            </div>
+          </>
         ) : (
           <div className="px-3 py-4 text-sm font-medium text-[var(--app-subtle)]">
-            当前供应商暂无可用模型
+            暂无 API 供应商模型
           </div>
         )}
       </div>
     </div>
   )
+}
+
+type ModelProviderGroup = {
+  id: string
+  name: string
+  models: OpenCodeModel[]
+  guiConfigured: boolean
+}
+
+function groupModelsByProvider(models: OpenCodeModel[]): ModelProviderGroup[] {
+  const groups = new Map<string, ModelProviderGroup>()
+  for (const model of models) {
+    const id = model.providerId
+    const group = groups.get(id) ?? {
+      id,
+      name: model.providerName || id,
+      models: [],
+      guiConfigured: false,
+    }
+    if (!group.name && model.providerName) group.name = model.providerName
+    group.models.push(model)
+    if (isGuiSettingsModel(model)) group.guiConfigured = true
+    groups.set(id, group)
+  }
+
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      models: group.models
+        .slice()
+        .sort((left, right) => (left.name || left.id).localeCompare(right.name || right.id)),
+    }))
+    .sort((left, right) => {
+      if (left.guiConfigured !== right.guiConfigured) return left.guiConfigured ? -1 : 1
+      return left.name.localeCompare(right.name)
+    })
+}
+
+function modelKey(model: OpenCodeModel) {
+  return `${model.providerId}/${model.id}`
+}
+
+function compareFavoriteModels(left: OpenCodeModel, right: OpenCodeModel, favoriteKeys: Set<string>) {
+  const leftFavorite = favoriteKeys.has(modelKey(left))
+  const rightFavorite = favoriteKeys.has(modelKey(right))
+  if (leftFavorite === rightFavorite) return 0
+  return leftFavorite ? -1 : 1
+}
+
+function modelSearchText(model: OpenCodeModel) {
+  return `${model.providerName} ${model.providerId} ${model.name} ${model.id}`.toLowerCase()
+}
+
+function isGuiSettingsModel(model: OpenCodeModel) {
+  const raw = model.raw
+  return Boolean(raw && typeof raw === "object" && (raw as { source?: unknown }).source === "gui-settings")
+}
+
+function providerGroupStatus(group: ModelProviderGroup) {
+  if (group.models.some((model) => model.status === "active")) return "active"
+  if (group.models.some((model) => model.status === "needs_auth")) return "needs_auth"
+  return "disabled"
+}
+
+function modelStatusLabel(status: string) {
+  if (status === "needs_auth") return "需应用"
+  if (status === "disabled") return "未启用"
+  return null
+}
+
+function providerStatusLabel(group: ModelProviderGroup) {
+  const status = providerGroupStatus(group)
+  if (status === "needs_auth") return "需应用"
+  if (status === "disabled") return "未启用"
+  return group.guiConfigured ? "GUI" : null
 }
 
 function ExpandToggle({
@@ -4932,11 +5237,13 @@ function stripFileReferenceLines(text: string, files: string[]) {
 
 function DiffUnavailableReviewCard({
   files,
+  serverBaseUrl,
   workspaceDirectory,
   onOpenDiff,
   onOpenReview,
 }: {
   files: string[]
+  serverBaseUrl?: string | null
   workspaceDirectory?: string | null
   onOpenDiff?: (diff: SessionDiffFile) => void
   onOpenReview?: (diffs: SessionDiffFile[], selectedDiff?: SessionDiffFile | null) => void
@@ -4948,7 +5255,7 @@ function DiffUnavailableReviewCard({
   const fileKey = files.join("\n")
 
   useEffect(() => {
-    if (!workspaceDirectory || !files.length) {
+    if (!serverBaseUrl || !workspaceDirectory || !files.length) {
       setAttempted(false)
       setRecoveredDiffs([])
       setError(null)
@@ -4958,7 +5265,7 @@ function DiffUnavailableReviewCard({
     setLoading(true)
     setAttempted(false)
     setError(null)
-    workspaceFileDiffs({ directory: workspaceDirectory, files })
+    workspaceFileDiffs({ baseUrl: serverBaseUrl, directory: workspaceDirectory, files })
       .then((diffs) => {
         if (cancelled) return
         setRecoveredDiffs(diffs)
@@ -4976,7 +5283,7 @@ function DiffUnavailableReviewCard({
     return () => {
       cancelled = true
     }
-  }, [fileKey, workspaceDirectory])
+  }, [fileKey, serverBaseUrl, workspaceDirectory])
 
   if (recoveredDiffs.length) {
     return (
@@ -4994,6 +5301,8 @@ function DiffUnavailableReviewCard({
       ? error
       : !workspaceDirectory
         ? "当前消息没有项目目录，无法恢复差异。"
+        : !serverBaseUrl
+          ? "OpenCode server 未连接，无法恢复差异。"
         : attempted
           ? "这条历史消息没有保存 patch，当前项目也没有可恢复的 Git diff。"
           : "这条历史消息没有保存 patch，正在准备恢复差异。"
@@ -5116,6 +5425,7 @@ function AssistantFileChangeCard({
 function AssistantTextContent({
   text,
   diffs,
+  serverBaseUrl,
   workspaceDirectory,
   onLocalFileOpen,
   onLocalFileContextMenu,
@@ -5125,6 +5435,7 @@ function AssistantTextContent({
 }: {
   text: string
   diffs: SessionDiffFile[]
+  serverBaseUrl?: string | null
   workspaceDirectory?: string | null
   onLocalFileOpen?: (path: string) => void
   onLocalFileContextMenu?: (path: string, position: LocalFileLinkPosition) => void
@@ -5163,6 +5474,7 @@ function AssistantTextContent({
       <div className="w-full space-y-3">
         <DiffUnavailableReviewCard
           files={referencedFiles}
+          serverBaseUrl={serverBaseUrl}
           workspaceDirectory={workspaceDirectory}
           onOpenDiff={onDiffOpen}
           onOpenReview={onReviewOpen}
@@ -5221,6 +5533,7 @@ function ThreadMessageBlock({
   hiddenRunBlocks,
   diffs = [],
   showActions,
+  serverBaseUrl,
   workspaceDirectory,
   onLocalFileOpen,
   onLocalFileContextMenu,
@@ -5241,6 +5554,7 @@ function ThreadMessageBlock({
   hiddenRunBlocks?: Record<number, true>
   diffs?: SessionDiffFile[]
   showActions?: boolean
+  serverBaseUrl?: string | null
   workspaceDirectory?: string | null
   onLocalFileOpen?: (path: string) => void
   onLocalFileContextMenu?: (path: string, position: LocalFileLinkPosition) => void
@@ -5394,6 +5708,7 @@ function ThreadMessageBlock({
                   <AssistantTextContent
                     text={item.text}
                     diffs={diffs}
+                    serverBaseUrl={serverBaseUrl}
                     workspaceDirectory={workspaceDirectory}
                     onLocalFileOpen={onLocalFileOpen}
                     onLocalFileContextMenu={onLocalFileContextMenu}

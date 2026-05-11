@@ -215,6 +215,74 @@ description: A skill in the .claude/skills directory.
     }),
   )
 
+  it.live("discovers skills from .codex/skills/ directory", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(dir, ".codex", "skills", "codex-skill", "SKILL.md"),
+              `---
+name: codex-skill
+description: A skill in the .codex/skills directory.
+---
+
+# Codex Skill
+`,
+            ),
+          )
+
+          const skill = yield* Skill.Service
+          const list = yield* skill.all()
+          expect(list.length).toBe(1)
+          const item = list.find((x) => x.name === "codex-skill")
+          expect(item).toBeDefined()
+          expect(item!.location).toContain(path.join(".codex", "skills", "codex-skill", "SKILL.md"))
+        }),
+      { git: true },
+    ),
+  )
+
+  it.live("discovers global skills from ~/.codex/skills/ directory", () =>
+    Effect.gen(function* () {
+      const tmp = yield* Effect.acquireRelease(
+        Effect.promise(() => tmpdir({ git: true })),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      )
+
+      yield* withHome(
+        tmp.path,
+        Effect.gen(function* () {
+          const skillDir = path.join(tmp.path, ".codex", "skills", "global-codex-skill")
+          yield* Effect.promise(() => fs.mkdir(skillDir, { recursive: true }))
+          yield* Effect.promise(() =>
+            Bun.write(
+              path.join(skillDir, "SKILL.md"),
+              `---
+name: global-codex-skill
+description: A global skill from ~/.codex/skills for testing.
+---
+
+# Global Codex Skill
+
+This skill is loaded from the global home directory.
+`,
+            ),
+          )
+
+          yield* Effect.gen(function* () {
+            const skill = yield* Skill.Service
+            const list = yield* skill.all()
+            expect(list.length).toBe(1)
+            expect(list[0].name).toBe("global-codex-skill")
+            expect(list[0].description).toBe("A global skill from ~/.codex/skills for testing.")
+            expect(list[0].location).toContain(path.join(".codex", "skills", "global-codex-skill", "SKILL.md"))
+          }).pipe(provideInstance(tmp.path))
+        }),
+      )
+    }),
+  )
+
   it.live("returns empty array when no skills exist", () =>
     provideTmpdirInstance(
       () =>

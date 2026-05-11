@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { normalizeThirdPartyProviders, providerPatchFromFetchedModels } from "./third-party-api"
+import {
+  canUseThirdPartyProviderAsDefault,
+  normalizeThirdPartyProviders,
+  providerPatchFromFetchedModels,
+  type GuiThirdPartyProvider,
+} from "./third-party-api"
 
-describe("third-party API model loading", () => {
+describe("API provider model loading", () => {
   test("uses fetched API models as the authoritative model list", () => {
     expect(
       providerPatchFromFetchedModels(
@@ -37,5 +42,31 @@ describe("third-party API model loading", () => {
         },
       ])[0]?.defaultModel,
     ).toBe("api-model-a")
+  })
+
+  test("allows default provider only after GUI enablement and OpenCode auth are ready", () => {
+    const provider: GuiThirdPartyProvider = {
+      id: "xiaomi",
+      name: "小米",
+      protocol: "openai-compatible",
+      baseUrl: "https://api.example.test/v1",
+      models: ["mimo-v2.5-pro"],
+      defaultModel: "mimo-v2.5-pro",
+      headers: "",
+      timeout: 300_000,
+      chunkTimeout: 60_000,
+      contextLimit: 128_000,
+      outputLimit: 16_384,
+      supportsReasoning: true,
+      supportsAttachment: false,
+      enabled: true,
+      authStored: true,
+      note: "",
+    }
+
+    expect(canUseThirdPartyProviderAsDefault(provider)).toBe(true)
+    expect(canUseThirdPartyProviderAsDefault({ ...provider, enabled: false })).toBe(false)
+    expect(canUseThirdPartyProviderAsDefault({ ...provider, authStored: false })).toBe(false)
+    expect(canUseThirdPartyProviderAsDefault({ ...provider, models: [] })).toBe(false)
   })
 })

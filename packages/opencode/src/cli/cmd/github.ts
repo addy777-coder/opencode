@@ -19,7 +19,6 @@ import type {
 import { UI } from "../ui"
 import { cmd } from "./cmd"
 import { effectCmd } from "../effect-cmd"
-import { ModelsDev } from "@/provider/models"
 import { InstanceRef } from "@/effect/instance-ref"
 import { SessionShare } from "@/share/session"
 import { Session } from "@/session/session"
@@ -205,8 +204,9 @@ export const GithubInstallCommand = effectCmd({
     const maybeCtx = yield* InstanceRef
     if (!maybeCtx) return yield* Effect.die("InstanceRef not provided")
     const ctx = maybeCtx
-    const modelsDev = yield* ModelsDev.Service
+    const providerSvc = yield* Provider.Service
     const gitSvc = yield* Git.Service
+    const providers: Record<string, Provider.Info> = yield* providerSvc.list()
     yield* Effect.promise(async () => {
       {
         UI.empty()
@@ -214,11 +214,10 @@ export const GithubInstallCommand = effectCmd({
         const app = await getAppInfo()
         await installGitHubApp()
 
-        const providers = await Effect.runPromise(modelsDev.get()).then((p) => {
-          // TODO: add guide for copilot, for now just hide it
-          delete p["github-copilot"]
-          return p
-        })
+        if (Object.keys(providers).length === 0) {
+          prompts.log.error("No configured providers found. Add a provider/model before installing the GitHub agent.")
+          throw new UI.CancelledError()
+        }
 
         const provider = await promptProvider()
         const model = await promptModel()
@@ -236,7 +235,7 @@ export const GithubInstallCommand = effectCmd({
             step2 = [
               `    2. Add the following secrets in org or repo (${app.owner}/${app.repo}) settings`,
               "",
-              ...providers[provider].env.map((e) => `       - ${e}`),
+              ...(providers[provider]?.env ?? []).map((e) => `       - ${e}`),
             ].join("\n")
           }
 

@@ -1,9 +1,24 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use std::path::PathBuf;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
+use sqlx::Row;
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::process::{Child, Command};
+use tokio::task::JoinSet;
 use tokio::time::{sleep, Duration};
+
+const CODEX_SKILLS_REPO: &str = "openai/skills";
+const CODEX_SKILLS_REF: &str = "main";
+const CODEX_CURATED_SKILLS_PATH: &str = "skills/.curated";
+const CODEX_RECOMMENDATION_CACHE_TTL_SECONDS: u64 = 10 * 60;
+
+type CodexRecommendationCache = Option<(SystemTime, Vec<SkillRecommendationInfo>)>;
+static CODEX_RECOMMENDATION_CACHE: OnceLock<Mutex<CodexRecommendationCache>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -25,6 +40,7 @@ pub struct SessionInfo {
     pub project_name: Option<String>,
     pub updated_at: Option<i64>,
     pub created_at: Option<i64>,
+    pub archived_at: Option<i64>,
     pub changed_files: Option<usize>,
 }
 
@@ -133,6 +149,47 @@ pub struct DiffFileInfo {
     pub raw: Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStatus {
+    pub root_path: String,
+    pub branch: Option<String>,
+    pub detached: bool,
+    pub dirty: bool,
+    pub ahead: u32,
+    pub behind: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextSearchSubmatch {
+    pub text: String,
+    pub start: u64,
+    pub end: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextSearchMatch {
+    pub path: String,
+    pub line: String,
+    pub line_number: u64,
+    pub absolute_offset: u64,
+    pub submatches: Vec<TextSearchSubmatch>,
+    pub raw: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SymbolSearchResult {
+    pub name: String,
+    pub kind: u64,
+    pub uri: Option<String>,
+    pub line: Option<u64>,
+    pub character: Option<u64>,
+    pub raw: Value,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandInfo {
@@ -140,6 +197,28 @@ pub struct CommandInfo {
     pub description: Option<String>,
     pub source: Option<String>,
     pub raw: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillInfo {
+    pub name: String,
+    pub description: String,
+    pub location: String,
+    pub content: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillRecommendationInfo {
+    pub name: String,
+    pub title: String,
+    pub description: String,
+    pub repo: String,
+    pub path: String,
+    pub ref_name: String,
+    pub installed: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -215,6 +294,14 @@ pub struct ThirdPartyProviderConfig {
     pub supports_reasoning: bool,
     #[serde(default)]
     pub supports_attachment: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderAuthStatus {
+    pub stored: bool,
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -377,14 +464,15 @@ pub async fn list_sessions(
     base_url: &str,
     directory: Option<&str>,
     limit: u32,
+    archived: Option<bool>,
 ) -> Result<Vec<SessionInfo>, reqwest::Error> {
-    let url = format!("{}/api/session", base_url.trim_end_matches('/'));
-    let mut query = vec![
-        ("limit".to_string(), limit.clamp(1, 200).to_string()),
-        ("order".to_string(), "desc".to_string()),
-    ];
+    let url = format!("{}/experimental/session", base_url.trim_end_matches('/'));
+    let mut query = vec![("limit".to_string(), limit.clamp(1, 200).to_string())];
     if let Some(directory) = directory.filter(|value| !value.trim().is_empty()) {
         query.push(("directory".to_string(), directory.to_string()));
+    }
+    if let Some(archived) = archived {
+        query.push(("archived".to_string(), archived.to_string()));
     }
 
     let response = reqwest::Client::new()
@@ -396,11 +484,13 @@ pub async fn list_sessions(
         .json::<Value>()
         .await?;
 
-    let items = response
-        .get("items")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let items = response.as_array().cloned().unwrap_or_else(|| {
+        response
+            .get("items")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    });
 
     Ok(items.iter().filter_map(session_from_value).collect())
 }
@@ -457,6 +547,10 @@ pub async fn create_session(
                 .get("time")
                 .and_then(|time| time.get("created"))
                 .and_then(Value::as_i64),
+            archived_at: response
+                .get("time")
+                .and_then(|time| time.get("archived"))
+                .and_then(Value::as_i64),
             changed_files: None,
         }),
     )
@@ -494,9 +588,276 @@ pub async fn update_session_title(
                 .get("time")
                 .and_then(|time| time.get("created"))
                 .and_then(Value::as_i64),
+            archived_at: response
+                .get("time")
+                .and_then(|time| time.get("archived"))
+                .and_then(Value::as_i64),
             changed_files: None,
         }),
     )
+}
+
+pub async fn update_session_archived(
+    base_url: &str,
+    directory: Option<&str>,
+    session_id: &str,
+    archived: bool,
+) -> Result<SessionInfo, String> {
+    let url = format!("{}/session/{}", base_url.trim_end_matches('/'), session_id);
+    let archived_at: Option<i64> = if archived {
+        Some(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_millis() as i64)
+                .unwrap_or_default(),
+        )
+    } else {
+        None
+    };
+
+    let response = match request_with_directory(reqwest::Client::new().patch(url), directory)
+        .json(&json!({ "time": { "archived": archived_at } }))
+        .send()
+        .await
+        .and_then(|response| response.error_for_status())
+    {
+        Ok(response) => response
+            .json::<Value>()
+            .await
+            .map_err(|error| format!("解析 OpenCode server 响应失败：{error}"))?,
+        Err(error) => {
+            return update_session_archived_local_db(session_id, archived_at)
+                .await?
+                .ok_or_else(|| format!("OpenCode server 更新归档失败：{error}"));
+        }
+    };
+
+    let parsed = session_from_value(&response).unwrap_or_else(|| SessionInfo {
+        id: string_field(&response, "id").unwrap_or_else(|| session_id.to_string()),
+        title: string_field(&response, "title").unwrap_or_else(|| "未命名线程".to_string()),
+        directory: string_field(&response, "directory")
+            .or_else(|| directory.map(ToOwned::to_owned)),
+        path: string_field(&response, "path"),
+        parent_id: string_field(&response, "parentID"),
+        project_name: None,
+        updated_at: response
+            .get("time")
+            .and_then(|time| time.get("updated"))
+            .and_then(Value::as_i64),
+        created_at: response
+            .get("time")
+            .and_then(|time| time.get("created"))
+            .and_then(Value::as_i64),
+        archived_at: response
+            .get("time")
+            .and_then(|time| time.get("archived"))
+            .and_then(Value::as_i64),
+        changed_files: None,
+    });
+
+    if parsed.archived_at == archived_at || (!archived && parsed.archived_at.is_none()) {
+        return Ok(parsed);
+    }
+
+    update_session_archived_local_db(session_id, archived_at)
+        .await?
+        .ok_or_else(|| {
+            if archived {
+                "OpenCode server 未写入归档状态，且本地数据库中未找到该会话。".to_string()
+            } else {
+                "OpenCode server 未清除归档状态，且本地数据库中未找到该会话。".to_string()
+            }
+        })
+}
+
+async fn update_session_archived_local_db(
+    session_id: &str,
+    archived_at: Option<i64>,
+) -> Result<Option<SessionInfo>, String> {
+    let candidates = opencode_db_candidates();
+    let mut errors = Vec::new();
+
+    for path in candidates {
+        let options = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(false)
+            .busy_timeout(Duration::from_secs(5));
+        let pool = match SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+        {
+            Ok(pool) => pool,
+            Err(error) => {
+                errors.push(format!("{}: {error}", path.display()));
+                continue;
+            }
+        };
+
+        let updated = sqlx::query("UPDATE session SET time_archived = ? WHERE id = ?")
+            .bind(archived_at)
+            .bind(session_id)
+            .execute(&pool)
+            .await;
+        let rows_affected = match updated {
+            Ok(result) => result.rows_affected(),
+            Err(error) => {
+                errors.push(format!("{}: {error}", path.display()));
+                pool.close().await;
+                continue;
+            }
+        };
+
+        if rows_affected > 0 {
+            let session = local_session_from_db(&pool, session_id)
+                .await
+                .map_err(|error| format!("读取本地会话失败：{error}"))?;
+            pool.close().await;
+            return Ok(session);
+        }
+
+        pool.close().await;
+    }
+
+    if errors.is_empty() {
+        Ok(None)
+    } else {
+        Err(format!("本地数据库兜底失败：{}", errors.join("; ")))
+    }
+}
+
+async fn local_session_from_db(
+    pool: &sqlx::SqlitePool,
+    session_id: &str,
+) -> Result<Option<SessionInfo>, sqlx::Error> {
+    let row = sqlx::query(
+        "SELECT id, title, directory, path, parent_id, time_updated, time_created, time_archived, summary_files
+         FROM session
+         WHERE id = ?",
+    )
+    .bind(session_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(session_info_from_sqlite_row))
+}
+
+fn session_info_from_sqlite_row(row: SqliteRow) -> SessionInfo {
+    SessionInfo {
+        id: sqlite_string(&row, "id").unwrap_or_else(|| "unknown".to_string()),
+        title: sqlite_string(&row, "title").unwrap_or_else(|| "未命名线程".to_string()),
+        directory: sqlite_string(&row, "directory"),
+        path: sqlite_string(&row, "path"),
+        parent_id: sqlite_string(&row, "parent_id"),
+        project_name: None,
+        updated_at: sqlite_i64(&row, "time_updated"),
+        created_at: sqlite_i64(&row, "time_created"),
+        archived_at: sqlite_i64(&row, "time_archived"),
+        changed_files: sqlite_i64(&row, "summary_files")
+            .and_then(|value| usize::try_from(value).ok()),
+    }
+}
+
+fn sqlite_string(row: &SqliteRow, field: &str) -> Option<String> {
+    row.try_get::<Option<String>, _>(field).ok().flatten()
+}
+
+fn sqlite_i64(row: &SqliteRow, field: &str) -> Option<i64> {
+    row.try_get::<Option<i64>, _>(field).ok().flatten()
+}
+
+fn opencode_db_candidates() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let mut seen = HashSet::new();
+    let data_dirs = opencode_data_dirs();
+
+    if let Ok(raw) = std::env::var("OPENCODE_DB") {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() && trimmed != ":memory:" {
+            let configured = PathBuf::from(trimmed);
+            if configured.is_absolute() {
+                push_existing_path(&mut paths, &mut seen, configured);
+            } else {
+                for dir in &data_dirs {
+                    push_existing_path(&mut paths, &mut seen, dir.join(trimmed));
+                }
+            }
+        }
+    }
+
+    for dir in data_dirs {
+        push_existing_path(&mut paths, &mut seen, dir.join("opencode-local.db"));
+        push_existing_path(&mut paths, &mut seen, dir.join("opencode.db"));
+
+        if let Ok(entries) = fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                    continue;
+                };
+                if name == "opencode.db" || (name.starts_with("opencode-") && name.ends_with(".db"))
+                {
+                    push_existing_path(&mut paths, &mut seen, path);
+                }
+            }
+        }
+    }
+
+    paths.sort_by_key(|path| std::cmp::Reverse(modified_millis(path)));
+    paths
+}
+
+fn opencode_data_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut seen = HashSet::new();
+
+    if let Ok(raw) = std::env::var("XDG_DATA_HOME") {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            push_unique_path(
+                &mut dirs,
+                &mut seen,
+                PathBuf::from(trimmed).join("opencode"),
+            );
+        }
+    }
+    if let Some(home) = dirs::home_dir() {
+        push_unique_path(
+            &mut dirs,
+            &mut seen,
+            home.join(".local").join("share").join("opencode"),
+        );
+    }
+    if let Some(data) = dirs::data_dir() {
+        push_unique_path(&mut dirs, &mut seen, data.join("opencode"));
+    }
+
+    dirs
+}
+
+fn push_existing_path(paths: &mut Vec<PathBuf>, seen: &mut HashSet<String>, path: PathBuf) {
+    if path.exists() {
+        push_unique_path(paths, seen, path);
+    }
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, seen: &mut HashSet<String>, path: PathBuf) {
+    let key = fs::canonicalize(&path)
+        .unwrap_or_else(|_| path.clone())
+        .to_string_lossy()
+        .to_lowercase();
+    if seen.insert(key) {
+        paths.push(path);
+    }
+}
+
+fn modified_millis(path: &Path) -> u128 {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
 }
 
 pub async fn fork_session(
@@ -529,8 +890,7 @@ pub async fn fork_session(
             directory: string_field(&response, "directory")
                 .or_else(|| directory.map(ToOwned::to_owned)),
             path: string_field(&response, "path"),
-            parent_id: string_field(&response, "parentID")
-                .or_else(|| Some(session_id.to_string())),
+            parent_id: string_field(&response, "parentID").or_else(|| Some(session_id.to_string())),
             project_name: None,
             updated_at: response
                 .get("time")
@@ -539,6 +899,10 @@ pub async fn fork_session(
             created_at: response
                 .get("time")
                 .and_then(|time| time.get("created"))
+                .and_then(Value::as_i64),
+            archived_at: response
+                .get("time")
+                .and_then(|time| time.get("archived"))
                 .and_then(Value::as_i64),
             changed_files: None,
         }),
@@ -863,7 +1227,48 @@ pub async fn session_diff(
     if let Some(message_id) = message_id.filter(|value| !value.trim().is_empty()) {
         request = request.query(&[("messageID", message_id)]);
     }
-    let response = request.send().await?.error_for_status()?.json::<Value>().await?;
+    let response = request
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<Value>()
+        .await?;
+
+    Ok(response
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(diff_from_value)
+        .collect())
+}
+
+pub async fn git_status(
+    base_url: &str,
+    directory: Option<&str>,
+) -> Result<Option<GitStatus>, reqwest::Error> {
+    let url = format!("{}/file/git/status", base_url.trim_end_matches('/'));
+    request_with_directory(reqwest::Client::new().get(url), directory)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<Option<GitStatus>>()
+        .await
+}
+
+pub async fn workspace_file_diffs(
+    base_url: &str,
+    directory: Option<&str>,
+    files: &[String],
+) -> Result<Vec<DiffFileInfo>, reqwest::Error> {
+    let url = format!("{}/file/diff", base_url.trim_end_matches('/'));
+    let response = request_with_directory(reqwest::Client::new().post(url), directory)
+        .json(&json!({ "files": files }))
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<Value>()
+        .await?;
 
     Ok(response
         .as_array()
@@ -903,6 +1308,62 @@ pub async fn find_files(
         .collect())
 }
 
+pub async fn find_text(
+    base_url: &str,
+    directory: Option<&str>,
+    pattern: &str,
+    limit: u32,
+) -> Result<Vec<TextSearchMatch>, reqwest::Error> {
+    let url = format!("{}/find", base_url.trim_end_matches('/'));
+    let response = request_with_directory(reqwest::Client::new().get(url), directory)
+        .query(&[("pattern", pattern.trim().to_string())])
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<Value>()
+        .await?;
+
+    let mut matches = response
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(text_match_from_value)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    matches.truncate(limit.clamp(1, 200) as usize);
+    Ok(matches)
+}
+
+pub async fn find_symbols(
+    base_url: &str,
+    directory: Option<&str>,
+    query: &str,
+    limit: u32,
+) -> Result<Vec<SymbolSearchResult>, reqwest::Error> {
+    let url = format!("{}/find/symbol", base_url.trim_end_matches('/'));
+    let response = request_with_directory(reqwest::Client::new().get(url), directory)
+        .query(&[("query", query.trim().to_string())])
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<Value>()
+        .await?;
+
+    let mut symbols = response
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(symbol_search_result_from_value)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    symbols.truncate(limit.clamp(1, 200) as usize);
+    Ok(symbols)
+}
+
 pub async fn list_commands(
     base_url: &str,
     directory: Option<&str>,
@@ -924,7 +1385,198 @@ pub async fn list_commands(
         .collect())
 }
 
-pub async fn pty_shells(base_url: &str, directory: Option<&str>) -> Result<Vec<PtyShellInfo>, reqwest::Error> {
+pub async fn list_skills(
+    base_url: &str,
+    directory: Option<&str>,
+) -> Result<Vec<SkillInfo>, reqwest::Error> {
+    let url = format!("{}/skill", base_url.trim_end_matches('/'));
+    let response = request_with_directory(reqwest::Client::new().get(url), directory)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<Value>()
+        .await?;
+
+    let mut skills = response
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(skill_from_value)
+        .collect::<Vec<_>>();
+
+    if let Ok(config) = global_config(&reqwest::Client::new(), base_url).await {
+        apply_skill_enabled_state(&mut skills, &config);
+    }
+
+    Ok(skills)
+}
+
+pub async fn list_codex_recommended_skills() -> Result<Vec<SkillRecommendationInfo>, String> {
+    let installed = local_codex_skill_names();
+    if let Some(mut recommendations) = cached_codex_recommendations() {
+        apply_recommendation_install_state(&mut recommendations, &installed);
+        return Ok(recommendations);
+    }
+
+    let client = github_client();
+    let entries = github_contents(
+        &client,
+        CODEX_SKILLS_REPO,
+        CODEX_SKILLS_REF,
+        CODEX_CURATED_SKILLS_PATH,
+    )
+    .await?;
+    let mut recommendations = Vec::new();
+    let mut tasks = JoinSet::new();
+
+    for entry in entries.into_iter().filter(|entry| entry.kind == "dir") {
+        let client = client.clone();
+        tasks.spawn(async move { codex_recommendation_from_entry(client, entry).await });
+    }
+
+    while let Some(result) = tasks.join_next().await {
+        recommendations.push(result.map_err(|error| format!("读取推荐技能失败：{error}"))?);
+    }
+
+    recommendations.sort_by(|a, b| {
+        a.title
+            .to_lowercase()
+            .cmp(&b.title.to_lowercase())
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    store_codex_recommendations(&recommendations);
+    apply_recommendation_install_state(&mut recommendations, &installed);
+    Ok(recommendations)
+}
+
+pub async fn install_codex_skill(
+    name: &str,
+    repo: Option<&str>,
+    path: Option<&str>,
+    ref_name: Option<&str>,
+) -> Result<SkillInfo, String> {
+    let name = name.trim();
+    if !is_safe_path_segment(name) {
+        return Err("技能名称无效".to_string());
+    }
+
+    let repo = repo
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(CODEX_SKILLS_REPO);
+    let ref_name = ref_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(CODEX_SKILLS_REF);
+    let skill_path = path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("{CODEX_CURATED_SKILLS_PATH}/{name}"));
+
+    let root = local_codex_skills_root()?;
+    fs::create_dir_all(&root).map_err(|error| format!("创建技能目录失败：{error}"))?;
+
+    let destination = root.join(name);
+    if destination.exists() {
+        return Err(format!("技能已安装：{name}"));
+    }
+
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_millis())
+        .unwrap_or_default();
+    let temp = root.join(format!(
+        ".opencode-gui-skill-install-{}-{stamp}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&temp);
+
+    let client = github_client();
+    let result = async {
+        download_github_directory(&client, repo, ref_name, &skill_path, &temp).await?;
+        let parsed = parse_local_skill_file(&temp.join("SKILL.md"))
+            .ok_or_else(|| "推荐技能缺少有效的 SKILL.md".to_string())?;
+        fs::rename(&temp, &destination).map_err(|error| format!("安装技能失败：{error}"))?;
+        Ok(SkillInfo {
+            location: destination.join("SKILL.md").to_string_lossy().to_string(),
+            ..parsed
+        })
+    }
+    .await;
+
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&temp);
+    }
+    result
+}
+
+pub async fn set_skill_enabled(base_url: &str, name: &str, enabled: bool) -> Result<Value, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("技能名称不能为空。".to_string());
+    }
+
+    let client = reqwest::Client::new();
+    let current = global_config(&client, base_url)
+        .await
+        .unwrap_or_else(|_| json!({}));
+    let mut skill_permissions = current
+        .get("permission")
+        .and_then(|permission| permission.get("skill"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    skill_permissions.insert(
+        name.to_string(),
+        Value::String(if enabled { "allow" } else { "deny" }.to_string()),
+    );
+
+    let result = update_global_config(
+        &client,
+        base_url,
+        json!({
+            "permission": {
+                "skill": skill_permissions,
+            },
+        }),
+    )
+    .await?;
+    dispose_instances(&client, base_url).await;
+    Ok(result)
+}
+
+pub fn uninstall_skill(name: &str, location: &str, directory: Option<&str>) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("技能名称不能为空。".to_string());
+    }
+
+    let skill_file =
+        fs::canonicalize(location).map_err(|error| format!("定位技能文件失败：{error}"))?;
+    if !skill_file.is_file() {
+        return Err("只能卸载本地 SKILL.md 文件。".to_string());
+    }
+    if skill_file
+        .file_name()
+        .map(|value| value.to_string_lossy().eq_ignore_ascii_case("SKILL.md"))
+        != Some(true)
+    {
+        return Err("只能卸载 SKILL.md 对应的技能目录。".to_string());
+    }
+
+    let skill_dir = skill_file
+        .parent()
+        .ok_or_else(|| "无法定位技能目录。".to_string())?;
+    ensure_uninstallable_skill_dir(skill_dir, directory)?;
+    fs::remove_dir_all(skill_dir).map_err(|error| format!("卸载技能失败：{error}"))
+}
+
+pub async fn pty_shells(
+    base_url: &str,
+    directory: Option<&str>,
+) -> Result<Vec<PtyShellInfo>, reqwest::Error> {
     let url = format!("{}/pty/shells", base_url.trim_end_matches('/'));
     request_with_directory(reqwest::Client::new().get(url), directory)
         .send()
@@ -934,7 +1586,10 @@ pub async fn pty_shells(base_url: &str, directory: Option<&str>) -> Result<Vec<P
         .await
 }
 
-pub async fn pty_list(base_url: &str, directory: Option<&str>) -> Result<Vec<PtyInfo>, reqwest::Error> {
+pub async fn pty_list(
+    base_url: &str,
+    directory: Option<&str>,
+) -> Result<Vec<PtyInfo>, reqwest::Error> {
     let url = format!("{}/pty", base_url.trim_end_matches('/'));
     request_with_directory(reqwest::Client::new().get(url), directory)
         .send()
@@ -951,16 +1606,31 @@ pub async fn pty_create(
 ) -> Result<PtyInfo, reqwest::Error> {
     let url = format!("{}/pty", base_url.trim_end_matches('/'));
     let mut payload = Map::new();
-    if let Some(command) = input.command.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(command) = input
+        .command
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         payload.insert("command".to_string(), json!(command));
     }
     if let Some(args) = input.args.as_ref().filter(|value| !value.is_empty()) {
         payload.insert("args".to_string(), json!(args));
     }
-    if let Some(cwd) = input.cwd.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(cwd) = input
+        .cwd
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         payload.insert("cwd".to_string(), json!(cwd));
     }
-    if let Some(title) = input.title.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(title) = input
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         payload.insert("title".to_string(), json!(title));
     }
     if let Some(env) = input.env.as_ref().filter(|value| !value.is_empty()) {
@@ -984,10 +1654,19 @@ pub async fn pty_update(
 ) -> Result<PtyInfo, reqwest::Error> {
     let url = format!("{}/pty/{}", base_url.trim_end_matches('/'), pty_id);
     let mut payload = Map::new();
-    if let Some(title) = input.title.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(title) = input
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         payload.insert("title".to_string(), json!(title));
     }
-    if let Some(size) = input.size.as_ref().filter(|value| value.rows > 0 && value.cols > 0) {
+    if let Some(size) = input
+        .size
+        .as_ref()
+        .filter(|value| value.rows > 0 && value.cols > 0)
+    {
         payload.insert(
             "size".to_string(),
             json!({
@@ -1097,16 +1776,14 @@ pub async fn apply_third_party_provider(
     base_url: &str,
     provider: &ThirdPartyProviderConfig,
     api_key: Option<&str>,
+    original_provider_id: Option<&str>,
 ) -> Result<Value, String> {
     validate_third_party_provider(provider)?;
 
     let client = reqwest::Client::new();
+    let provider_id = provider.id.trim();
     if let Some(api_key) = api_key.map(str::trim).filter(|value| !value.is_empty()) {
-        let auth_url = format!(
-            "{}/auth/{}",
-            base_url.trim_end_matches('/'),
-            provider.id.trim()
-        );
+        let auth_url = format!("{}/auth/{}", base_url.trim_end_matches('/'), provider_id);
         client
             .put(auth_url)
             .json(&json!({
@@ -1118,6 +1795,23 @@ pub async fn apply_third_party_provider(
             .map_err(|error| format!("写入 OpenCode auth 失败：{error}"))?
             .error_for_status()
             .map_err(|error| format!("写入 OpenCode auth 失败：{error}"))?;
+    } else if let Some(original_id) = original_provider_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != provider_id)
+    {
+        let auth_move_url = format!(
+            "{}/auth/{}/move/{}",
+            base_url.trim_end_matches('/'),
+            original_id,
+            provider_id
+        );
+        client
+            .post(auth_move_url)
+            .send()
+            .await
+            .map_err(|error| format!("迁移 OpenCode auth 失败：{error}"))?
+            .error_for_status()
+            .map_err(|error| format!("迁移 OpenCode auth 失败：{error}"))?;
     }
 
     let current = global_config(&client, base_url)
@@ -1148,6 +1842,22 @@ pub async fn apply_third_party_provider(
     let result = update_global_config(&client, base_url, Value::Object(patch)).await?;
     dispose_instances(&client, base_url).await;
     Ok(result)
+}
+
+pub async fn provider_auth_status(
+    base_url: &str,
+) -> Result<HashMap<String, ProviderAuthStatus>, String> {
+    let url = format!("{}/auth", base_url.trim_end_matches('/'));
+    reqwest::Client::new()
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| format!("读取 OpenCode auth 状态失败：{error}"))?
+        .error_for_status()
+        .map_err(|error| format!("读取 OpenCode auth 状态失败：{error}"))?
+        .json::<HashMap<String, ProviderAuthStatus>>()
+        .await
+        .map_err(|error| format!("解析 OpenCode auth 状态失败：{error}"))
 }
 
 pub async fn remove_third_party_provider(
@@ -1351,6 +2061,10 @@ fn session_from_value(value: &Value) -> Option<SessionInfo> {
             .get("time")
             .and_then(|time| time.get("created"))
             .and_then(Value::as_i64),
+        archived_at: value
+            .get("time")
+            .and_then(|time| time.get("archived"))
+            .and_then(Value::as_i64),
         changed_files: summary
             .and_then(|summary| summary.get("files"))
             .and_then(Value::as_u64)
@@ -1377,6 +2091,80 @@ fn string_array(value: &Value, key: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn u64_field(value: &Value, key: &str) -> Option<u64> {
+    value.get(key).and_then(Value::as_u64)
+}
+
+fn text_submatch_from_value(value: &Value) -> Option<TextSearchSubmatch> {
+    Some(TextSearchSubmatch {
+        text: value
+            .get("match")
+            .and_then(|matched| string_field(matched, "text"))
+            .or_else(|| string_field(value, "text"))
+            .unwrap_or_default(),
+        start: u64_field(value, "start").unwrap_or_default(),
+        end: u64_field(value, "end").unwrap_or_default(),
+    })
+}
+
+fn text_match_from_value(value: &Value) -> Option<TextSearchMatch> {
+    let path = value
+        .get("path")
+        .and_then(|path| string_field(path, "text"))
+        .or_else(|| string_field(value, "path"))?;
+    let line = value
+        .get("lines")
+        .and_then(|lines| string_field(lines, "text"))
+        .or_else(|| string_field(value, "line"))
+        .unwrap_or_default();
+    let submatches = value
+        .get("submatches")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(text_submatch_from_value)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    Some(TextSearchMatch {
+        path,
+        line,
+        line_number: u64_field(value, "line_number")
+            .or_else(|| u64_field(value, "lineNumber"))
+            .unwrap_or_default(),
+        absolute_offset: u64_field(value, "absolute_offset")
+            .or_else(|| u64_field(value, "absoluteOffset"))
+            .unwrap_or_default(),
+        submatches,
+        raw: value.clone(),
+    })
+}
+
+fn symbol_search_result_from_value(value: &Value) -> Option<SymbolSearchResult> {
+    let location = value.get("location");
+    let range = location
+        .and_then(|location| location.get("range"))
+        .or_else(|| value.get("range"));
+    let start = range.and_then(|range| range.get("start"));
+    let line = start
+        .and_then(|start| u64_field(start, "line"))
+        .map(|line| line + 1);
+    let character = start.and_then(|start| u64_field(start, "character"));
+
+    Some(SymbolSearchResult {
+        name: string_field(value, "name")?,
+        kind: u64_field(value, "kind").unwrap_or_default(),
+        uri: location
+            .and_then(|location| string_field(location, "uri"))
+            .or_else(|| string_field(value, "uri")),
+        line,
+        character,
+        raw: value.clone(),
+    })
 }
 
 fn permission_from_value(value: &Value) -> Option<PermissionInfo> {
@@ -1422,7 +2210,12 @@ fn question_from_value(value: &Value) -> Option<QuestionInfo> {
     let questions = value
         .get("questions")
         .and_then(Value::as_array)
-        .map(|items| items.iter().filter_map(question_prompt_from_value).collect())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(question_prompt_from_value)
+                .collect()
+        })
         .unwrap_or_default();
     let tool = value.get("tool").and_then(|tool| {
         let message_id = string_field(tool, "messageID")?;
@@ -1558,6 +2351,531 @@ fn command_from_value(value: &Value) -> Option<CommandInfo> {
         source: string_field(value, "source"),
         raw: value.clone(),
     })
+}
+
+fn skill_from_value(value: &Value) -> Option<SkillInfo> {
+    Some(SkillInfo {
+        name: string_field(value, "name")?,
+        description: string_field(value, "description").unwrap_or_default(),
+        location: string_field(value, "location").unwrap_or_default(),
+        content: string_field(value, "content").unwrap_or_default(),
+        enabled: true,
+    })
+}
+
+fn local_codex_skill_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(home) = std::env::var("CODEX_HOME") {
+        roots.push(PathBuf::from(home).join("skills"));
+    }
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home.join(".codex").join("skills"));
+    }
+
+    roots.dedup();
+    roots
+}
+
+#[cfg(test)]
+fn read_skill_root(root: &Path) -> Vec<SkillInfo> {
+    let Ok(entries) = fs::read_dir(root) else {
+        return Vec::new();
+    };
+
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            if !path.is_dir() {
+                return None;
+            }
+            let name = path.file_name()?.to_string_lossy();
+            if name.starts_with('.') {
+                return None;
+            }
+            parse_local_skill_file(&path.join("SKILL.md"))
+        })
+        .collect()
+}
+
+fn parse_local_skill_file(path: &Path) -> Option<SkillInfo> {
+    let raw = fs::read_to_string(path).ok()?;
+    let (frontmatter, content) = split_frontmatter(&raw)?;
+    let name = frontmatter_field(frontmatter, "name")?;
+    Some(SkillInfo {
+        name,
+        description: frontmatter_field(frontmatter, "description").unwrap_or_default(),
+        location: path.to_string_lossy().to_string(),
+        content: content.trim_start().to_string(),
+        enabled: true,
+    })
+}
+
+fn apply_skill_enabled_state(skills: &mut [SkillInfo], config: &Value) {
+    for skill in skills {
+        skill.enabled = skill_enabled_from_config(config, &skill.name);
+    }
+}
+
+fn skill_enabled_from_config(config: &Value, name: &str) -> bool {
+    let Some(rule) = config
+        .get("permission")
+        .and_then(|permission| permission.get("skill"))
+    else {
+        return true;
+    };
+
+    if let Some(action) = rule.as_str() {
+        return action != "deny";
+    }
+
+    let Some(map) = rule.as_object() else {
+        return true;
+    };
+
+    let mut enabled = true;
+    for (pattern, action) in map {
+        if !wildcard_match(pattern, name) {
+            continue;
+        }
+        enabled = action.as_str() != Some("deny");
+    }
+    enabled
+}
+
+fn wildcard_match(pattern: &str, value: &str) -> bool {
+    let pattern = pattern.to_ascii_lowercase();
+    let value = value.to_ascii_lowercase();
+    if pattern == "*" || pattern == value {
+        return true;
+    }
+    if !pattern.contains('*') {
+        return false;
+    }
+
+    let anchored_start = !pattern.starts_with('*');
+    let anchored_end = !pattern.ends_with('*');
+    let parts = pattern
+        .split('*')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        return true;
+    }
+
+    let mut cursor = 0usize;
+    for (index, part) in parts.iter().enumerate() {
+        let Some(found) = value[cursor..].find(part) else {
+            return false;
+        };
+        if index == 0 && anchored_start && found != 0 {
+            return false;
+        }
+        cursor += found + part.len();
+    }
+
+    if anchored_end {
+        value.ends_with(parts.last().copied().unwrap_or_default())
+    } else {
+        true
+    }
+}
+
+fn ensure_uninstallable_skill_dir(skill_dir: &Path, directory: Option<&str>) -> Result<(), String> {
+    for root in local_codex_skill_roots() {
+        let Ok(root) = fs::canonicalize(root) else {
+            continue;
+        };
+        if !skill_dir.starts_with(&root) {
+            continue;
+        }
+        let relative = skill_dir
+            .strip_prefix(&root)
+            .map_err(|error| error.to_string())?;
+        if relative
+            .components()
+            .next()
+            .map(|component| component.as_os_str().to_string_lossy().starts_with('.'))
+            .unwrap_or(true)
+        {
+            return Err("系统内置技能不能卸载，请改为禁用。".to_string());
+        }
+        return Ok(());
+    }
+
+    if is_inside_named_skill_root(skill_dir, ".opencode", "skills") {
+        return Ok(());
+    }
+
+    if let Some(directory) = directory {
+        let _ = fs::canonicalize(directory).map_err(|error| format!("定位工作区失败：{error}"))?;
+    }
+    Err("这个技能来自插件缓存、系统目录或当前工作区之外，不能直接卸载，请改为禁用。".to_string())
+}
+
+fn is_inside_named_skill_root(skill_dir: &Path, config_dir: &str, skill_root: &str) -> bool {
+    let parts = skill_dir
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    for index in 0..parts.len().saturating_sub(2) {
+        if parts[index].eq_ignore_ascii_case(config_dir)
+            && parts[index + 1].eq_ignore_ascii_case(skill_root)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn split_frontmatter(raw: &str) -> Option<(&str, &str)> {
+    let raw = raw.strip_prefix('\u{feff}').unwrap_or(raw);
+    let mut lines = raw.split_inclusive('\n');
+    let first = lines.next()?;
+    if first.trim_end_matches(['\r', '\n']) != "---" {
+        return None;
+    }
+
+    let frontmatter_start = first.len();
+    let mut cursor = frontmatter_start;
+    for line in lines {
+        if line.trim_end_matches(['\r', '\n']) == "---" {
+            return Some((&raw[frontmatter_start..cursor], &raw[cursor + line.len()..]));
+        }
+        cursor += line.len();
+    }
+
+    None
+}
+
+fn frontmatter_field(frontmatter: &str, key: &str) -> Option<String> {
+    for line in frontmatter.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name.trim() != key {
+            continue;
+        }
+        let value = value.trim();
+        let unquoted = value
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .or_else(|| {
+                value
+                    .strip_prefix('\'')
+                    .and_then(|value| value.strip_suffix('\''))
+            })
+            .unwrap_or(value);
+        return Some(unquoted.to_string());
+    }
+
+    None
+}
+
+#[derive(Debug, Clone)]
+struct GithubContentEntry {
+    name: String,
+    path: String,
+    kind: String,
+    download_url: Option<String>,
+}
+
+fn local_codex_skills_root() -> Result<PathBuf, String> {
+    if let Ok(home) = std::env::var("CODEX_HOME") {
+        return Ok(PathBuf::from(home).join("skills"));
+    }
+    dirs::home_dir()
+        .map(|home| home.join(".codex").join("skills"))
+        .ok_or_else(|| "无法定位 Codex skills 目录".to_string())
+}
+
+fn local_codex_skill_names() -> Vec<String> {
+    local_codex_skill_roots()
+        .into_iter()
+        .flat_map(|root| {
+            fs::read_dir(root)
+                .ok()
+                .into_iter()
+                .flat_map(|entries| entries.filter_map(Result::ok))
+                .filter_map(|entry| {
+                    let path = entry.path();
+                    let name = path.file_name()?.to_string_lossy();
+                    if name.starts_with('.') {
+                        return None;
+                    }
+                    if !path.is_dir() || !path.join("SKILL.md").is_file() {
+                        return None;
+                    }
+                    parse_local_skill_file(&path.join("SKILL.md")).map(|skill| skill.name)
+                })
+        })
+        .collect()
+}
+
+fn cached_codex_recommendations() -> Option<Vec<SkillRecommendationInfo>> {
+    let cache = CODEX_RECOMMENDATION_CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .ok()?;
+    let (cached_at, recommendations) = cache.as_ref()?;
+    let age = cached_at.elapsed().ok()?;
+    if age.as_secs() <= CODEX_RECOMMENDATION_CACHE_TTL_SECONDS {
+        Some(recommendations.clone())
+    } else {
+        None
+    }
+}
+
+fn store_codex_recommendations(recommendations: &[SkillRecommendationInfo]) {
+    if let Ok(mut cache) = CODEX_RECOMMENDATION_CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+    {
+        *cache = Some((SystemTime::now(), recommendations.to_vec()));
+    }
+}
+
+fn apply_recommendation_install_state(
+    recommendations: &mut [SkillRecommendationInfo],
+    installed: &[String],
+) {
+    for recommendation in recommendations {
+        recommendation.installed =
+            recommendation_installed(installed, &recommendation.name, &recommendation.path);
+    }
+}
+
+fn recommendation_installed(installed: &[String], name: &str, path: &str) -> bool {
+    let path_name = path.rsplit('/').next().unwrap_or(path);
+    installed.iter().any(|installed_name| {
+        installed_name.eq_ignore_ascii_case(name) || installed_name.eq_ignore_ascii_case(path_name)
+    })
+}
+
+fn github_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent("opencode-gui-skills")
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(20))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
+async fn codex_recommendation_from_entry(
+    client: reqwest::Client,
+    entry: GithubContentEntry,
+) -> SkillRecommendationInfo {
+    let GithubContentEntry {
+        name: entry_name,
+        path: skill_path,
+        ..
+    } = entry;
+    let skill_md_path = format!("{skill_path}/SKILL.md");
+    let raw = fetch_github_text(&client, CODEX_SKILLS_REPO, CODEX_SKILLS_REF, &skill_md_path)
+        .await
+        .unwrap_or_default();
+    let metadata = split_frontmatter(&raw).map(|(frontmatter, _)| frontmatter);
+    let name = metadata
+        .and_then(|frontmatter| frontmatter_field(frontmatter, "name"))
+        .unwrap_or(entry_name);
+    let description = metadata
+        .and_then(|frontmatter| frontmatter_field(frontmatter, "description"))
+        .unwrap_or_default();
+
+    SkillRecommendationInfo {
+        title: title_from_skill_name(&name),
+        installed: false,
+        name,
+        description,
+        repo: CODEX_SKILLS_REPO.to_string(),
+        path: skill_path,
+        ref_name: CODEX_SKILLS_REF.to_string(),
+    }
+}
+
+async fn github_contents(
+    client: &reqwest::Client,
+    repo: &str,
+    ref_name: &str,
+    path: &str,
+) -> Result<Vec<GithubContentEntry>, String> {
+    let url = github_contents_url(repo, ref_name, path)?;
+    let response = client
+        .get(url)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|error| format!("读取推荐技能失败：{error}"))?
+        .error_for_status()
+        .map_err(|error| format!("读取推荐技能失败：{error}"))?
+        .json::<Value>()
+        .await
+        .map_err(|error| format!("解析推荐技能失败：{error}"))?;
+
+    Ok(response
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(github_content_entry_from_value)
+        .collect())
+}
+
+fn github_content_entry_from_value(value: Value) -> Option<GithubContentEntry> {
+    Some(GithubContentEntry {
+        name: string_field(&value, "name")?,
+        path: string_field(&value, "path")?,
+        kind: string_field(&value, "type")?,
+        download_url: string_field(&value, "download_url"),
+    })
+}
+
+async fn fetch_github_text(
+    client: &reqwest::Client,
+    repo: &str,
+    ref_name: &str,
+    path: &str,
+) -> Result<String, String> {
+    let url = github_raw_url(repo, ref_name, path)?;
+    client
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| format!("读取技能说明失败：{error}"))?
+        .error_for_status()
+        .map_err(|error| format!("读取技能说明失败：{error}"))?
+        .text()
+        .await
+        .map_err(|error| format!("读取技能说明失败：{error}"))
+}
+
+async fn download_github_directory(
+    client: &reqwest::Client,
+    repo: &str,
+    ref_name: &str,
+    repo_path: &str,
+    destination: &Path,
+) -> Result<(), String> {
+    fs::create_dir_all(destination).map_err(|error| format!("创建临时目录失败：{error}"))?;
+    let mut pending = vec![(repo_path.to_string(), destination.to_path_buf())];
+
+    while let Some((current_path, current_destination)) = pending.pop() {
+        let entries = github_contents(client, repo, ref_name, &current_path).await?;
+        fs::create_dir_all(&current_destination)
+            .map_err(|error| format!("创建技能目录失败：{error}"))?;
+
+        for entry in entries {
+            if !is_safe_path_segment(&entry.name) {
+                return Err("推荐技能包含无效文件名".to_string());
+            }
+
+            let target = current_destination.join(&entry.name);
+            match entry.kind.as_str() {
+                "dir" => pending.push((entry.path, target)),
+                "file" => {
+                    let url = entry
+                        .download_url
+                        .or_else(|| github_raw_url(repo, ref_name, &entry.path).ok())
+                        .ok_or_else(|| "推荐技能文件缺少下载地址".to_string())?;
+                    let bytes = client
+                        .get(url)
+                        .send()
+                        .await
+                        .map_err(|error| format!("下载技能文件失败：{error}"))?
+                        .error_for_status()
+                        .map_err(|error| format!("下载技能文件失败：{error}"))?
+                        .bytes()
+                        .await
+                        .map_err(|error| format!("下载技能文件失败：{error}"))?;
+                    fs::write(&target, &bytes)
+                        .map_err(|error| format!("写入技能文件失败：{error}"))?;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn github_contents_url(repo: &str, ref_name: &str, path: &str) -> Result<String, String> {
+    let (owner, repo_name) = split_github_repo(repo)?;
+    let mut url = reqwest::Url::parse("https://api.github.com/")
+        .map_err(|error| format!("GitHub 地址无效：{error}"))?;
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| "GitHub 地址无效".to_string())?;
+        segments
+            .push("repos")
+            .push(owner)
+            .push(repo_name)
+            .push("contents");
+        for segment in path.split('/').filter(|segment| !segment.is_empty()) {
+            segments.push(segment);
+        }
+    }
+    url.query_pairs_mut().append_pair("ref", ref_name);
+    Ok(url.to_string())
+}
+
+fn github_raw_url(repo: &str, ref_name: &str, path: &str) -> Result<String, String> {
+    let (owner, repo_name) = split_github_repo(repo)?;
+    let mut url = reqwest::Url::parse("https://raw.githubusercontent.com/")
+        .map_err(|error| format!("GitHub 地址无效：{error}"))?;
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| "GitHub 地址无效".to_string())?;
+        segments.push(owner).push(repo_name).push(ref_name);
+        for segment in path.split('/').filter(|segment| !segment.is_empty()) {
+            segments.push(segment);
+        }
+    }
+    Ok(url.to_string())
+}
+
+fn split_github_repo(repo: &str) -> Result<(&str, &str), String> {
+    let mut parts = repo.split('/');
+    let owner = parts.next().filter(|value| !value.trim().is_empty());
+    let name = parts.next().filter(|value| !value.trim().is_empty());
+    if parts.next().is_some() {
+        return Err("GitHub repo 格式应为 owner/repo".to_string());
+    }
+    match (owner, name) {
+        (Some(owner), Some(name)) => Ok((owner, name)),
+        _ => Err("GitHub repo 格式应为 owner/repo".to_string()),
+    }
+}
+
+fn is_safe_path_segment(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains('/') && !name.contains('\\')
+}
+
+fn title_from_skill_name(name: &str) -> String {
+    name.split(['-', '_'])
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            if part.eq_ignore_ascii_case("aspnet") {
+                "Aspnet".to_string()
+            } else if part.eq_ignore_ascii_case("cli") {
+                "CLI".to_string()
+            } else if part.eq_ignore_ascii_case("pdf") {
+                "PDF".to_string()
+            } else {
+                let mut chars = part.chars();
+                match chars.next() {
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                    None => String::new(),
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn agent_from_value(value: &Value) -> Option<AgentInfo> {
@@ -1765,6 +3083,12 @@ async fn dispose_instances(client: &reqwest::Client, base_url: &str) {
     let _ = client.post(url).send().await;
 }
 
+pub async fn dispose_instance(base_url: &str, directory: Option<&str>) {
+    let url = format!("{}/instance/dispose", base_url.trim_end_matches('/'));
+    let request = request_with_directory(reqwest::Client::new().post(url), directory);
+    let _ = request.send().await;
+}
+
 async fn fetch_provider_models_from_url(
     client: &reqwest::Client,
     url: &str,
@@ -1935,5 +3259,73 @@ mod tests {
             serde_json::to_value(token).expect("token should serialize for frontend"),
             serde_json::json!({ "ticket": "abc", "expiresIn": 60 })
         );
+    }
+
+    #[test]
+    fn local_codex_skill_reader_skips_system_dirs_and_parses_frontmatter() {
+        let root =
+            std::env::temp_dir().join(format!("opencode-gui-skill-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+
+        let skill_dir = root.join("code");
+        fs::create_dir_all(&skill_dir).expect("skill dir should be created");
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: code\ndescription: Development skill.\n---\n\n# Code\n",
+        )
+        .expect("skill file should be written");
+
+        let system_dir = root.join(".system");
+        fs::create_dir_all(&system_dir).expect("system dir should be created");
+        fs::write(
+            system_dir.join("SKILL.md"),
+            "---\nname: internal\ndescription: Hidden system skill.\n---\n\n# Internal\n",
+        )
+        .expect("system skill file should be written");
+
+        let skills = read_skill_root(&root);
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "code");
+        assert_eq!(skills[0].description, "Development skill.");
+        assert_eq!(skills[0].content, "# Code\n");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn opencode_skill_dirs_can_be_uninstalled_from_parent_config_dirs() {
+        let root = PathBuf::from("D:\\Desktop\\开发工具\\.opencode\\skills\\code");
+        assert!(is_inside_named_skill_root(&root, ".opencode", "skills"));
+
+        let plugin_skill =
+            PathBuf::from("C:\\Users\\d8743\\.codex\\plugins\\cache\\browser\\skills\\browser");
+        assert!(!is_inside_named_skill_root(
+            &plugin_skill,
+            ".opencode",
+            "skills"
+        ));
+    }
+
+    #[test]
+    fn uninstall_skill_removes_local_opencode_skill_dir() {
+        let root = std::env::temp_dir().join(format!(
+            "opencode-gui-uninstall-skill-test-{}",
+            std::process::id()
+        ));
+        let skill_dir = root.join(".opencode").join("skills").join("demo");
+        let skill_file = skill_dir.join("SKILL.md");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&skill_dir).expect("skill dir should be created");
+        fs::write(
+            &skill_file,
+            "---\nname: demo\ndescription: Demo skill.\n---\n\n# Demo\n",
+        )
+        .expect("skill file should be written");
+
+        uninstall_skill("demo", &skill_file.to_string_lossy(), None)
+            .expect("local opencode skill should uninstall");
+
+        assert!(!skill_dir.exists());
+        let _ = fs::remove_dir_all(&root);
     }
 }

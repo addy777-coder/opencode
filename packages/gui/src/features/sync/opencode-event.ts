@@ -116,6 +116,7 @@ export function sessionFromOpenCodeEvent(payload: unknown, fallbackDirectory?: s
         : null,
     updatedAt: timeField(source, "updated") ?? numberField(source, "updatedAt"),
     createdAt: timeField(source, "created") ?? numberField(source, "createdAt"),
+    archivedAt: timeField(source, "archived") ?? numberField(source, "archivedAt"),
     changedFiles: numberField(summary, "files"),
   }
 }

@@ -8,6 +8,18 @@ const AuthParams = Schema.Struct({
   providerID: ProviderID,
 })
 
+const AuthMoveParams = Schema.Struct({
+  providerID: ProviderID,
+  targetProviderID: ProviderID,
+})
+
+const AuthStatus = Schema.Struct({
+  stored: Schema.Boolean,
+  type: Schema.String,
+})
+
+const AuthStatuses = Schema.Record(Schema.String, AuthStatus)
+
 const LogQuery = Schema.Struct({
   directory: Schema.optional(Schema.String),
   workspace: Schema.optional(Schema.String),
@@ -28,13 +40,25 @@ export const LogInput = Schema.Struct({
 })
 
 export const ControlPaths = {
+  authList: "/auth",
   auth: "/auth/:providerID",
+  authMove: "/auth/:providerID/move/:targetProviderID",
   log: "/log",
 } as const
 
 export const ControlApi = HttpApi.make("control").add(
   HttpApiGroup.make("control")
     .add(
+      HttpApiEndpoint.get("authList", ControlPaths.authList, {
+        success: described(AuthStatuses, "Stored auth status by provider"),
+        error: HttpApiError.BadRequest,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "auth.list",
+          summary: "List auth status",
+          description: "List provider auth records without returning credentials.",
+        }),
+      ),
       HttpApiEndpoint.put("authSet", ControlPaths.auth, {
         params: AuthParams,
         payload: Auth.Info,
@@ -45,6 +69,17 @@ export const ControlApi = HttpApi.make("control").add(
           identifier: "auth.set",
           summary: "Set auth credentials",
           description: "Set authentication credentials",
+        }),
+      ),
+      HttpApiEndpoint.post("authMove", ControlPaths.authMove, {
+        params: AuthMoveParams,
+        success: described(Schema.Boolean, "Successfully moved authentication credentials"),
+        error: HttpApiError.BadRequest,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "auth.move",
+          summary: "Move auth credentials",
+          description: "Move authentication credentials between provider IDs without returning credentials.",
         }),
       ),
       HttpApiEndpoint.delete("authRemove", ControlPaths.auth, {

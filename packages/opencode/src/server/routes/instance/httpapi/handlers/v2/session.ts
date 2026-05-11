@@ -17,6 +17,7 @@ const SessionCursor = Schema.Struct({
   roots: Schema.Boolean.pipe(Schema.optional),
   start: Schema.Finite.pipe(Schema.optional),
   search: Schema.String.pipe(Schema.optional),
+  archived: Schema.Boolean.pipe(Schema.optional),
 })
 type SessionCursor = typeof SessionCursor.Type
 
@@ -27,7 +28,7 @@ const sessionCursor = {
     session: SessionV2.Info,
     order: "asc" | "desc",
     direction: "previous" | "next",
-    filters: Pick<SessionCursor, "directory" | "path" | "workspaceID" | "roots" | "start" | "search">,
+    filters: Pick<SessionCursor, "directory" | "path" | "workspaceID" | "roots" | "start" | "search" | "archived">,
   ) {
     return Buffer.from(
       JSON.stringify({ id: session.id, time: session.time.created, order, direction, ...filters }),
@@ -58,6 +59,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "v2.session
             roots: ctx.query.roots,
             start: ctx.query.start,
             search: ctx.query.search,
+            archived: ctx.query.archived,
           }
           const sessions = yield* session.list({
             limit: ctx.query.limit ?? DefaultSessionsLimit,
@@ -68,6 +70,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "v2.session
             roots: filters.roots,
             start: filters.start,
             search: filters.search,
+            archived: filters.archived,
             cursor: decoded ? { id: decoded.id, time: decoded.time, direction: decoded.direction } : undefined,
           })
           const first = sessions[0]

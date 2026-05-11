@@ -8,6 +8,8 @@ export const syncQueryKeys = {
   executionOptions: (baseUrl?: string | null, directory?: string | null) =>
     ["execution-options", baseUrl, directory] as const,
   commands: (baseUrl?: string | null, directory?: string | null) => ["commands", baseUrl, directory] as const,
+  skills: (baseUrl?: string | null, directory?: string | null) => ["skills", baseUrl, directory] as const,
+  skillRecommendations: () => ["skill-recommendations"] as const,
   gitStatus: (directory?: string | null, autoDetect?: boolean) => ["git-status", directory, autoDetect] as const,
   permissions: (baseUrl?: string | null, directory?: string | null) => ["permissions", baseUrl, directory] as const,
   questions: (baseUrl?: string | null, directory?: string | null) => ["questions", baseUrl, directory] as const,

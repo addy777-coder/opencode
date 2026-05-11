@@ -51,8 +51,10 @@ export function applyOpenCodeEventToQueryCache(
   switch (event.type) {
     case "session.created":
     case "session.updated": {
-      if (session) upsertSession(queryClient, target, session)
+      if (session?.archivedAt) removeSession(queryClient, { ...target, sessionId: session.id })
+      else if (session) upsertSession(queryClient, target, session)
       invalidateSessions(queryClient, target)
+      invalidateArchivedSessions(queryClient)
       break
     }
     case "session.deleted": {
@@ -62,6 +64,7 @@ export function applyOpenCodeEventToQueryCache(
         removeSessionQueries(queryClient, { ...target, sessionId: id })
       }
       invalidateSessions(queryClient, target)
+      invalidateArchivedSessions(queryClient)
       break
     }
     case "session.status": {
@@ -189,6 +192,10 @@ export function invalidateSessions(queryClient: QueryClient, target: SyncQueryTa
         directory: target.directory,
       }),
   })
+}
+
+export function invalidateArchivedSessions(queryClient: QueryClient) {
+  void queryClient.invalidateQueries({ queryKey: ["archived-sessions"] })
 }
 
 export function invalidateSessionStatus(queryClient: QueryClient, target: SyncQueryTarget) {

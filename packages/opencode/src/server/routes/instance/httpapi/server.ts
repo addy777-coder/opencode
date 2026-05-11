@@ -12,6 +12,7 @@ import { Command } from "@/command"
 import * as Observability from "@opencode-ai/core/effect/observability"
 import { File } from "@/file"
 import { FileWatcher } from "@/file/watcher"
+import { Git } from "@/git"
 import { Ripgrep } from "@/file/ripgrep"
 import { Format } from "@/format"
 import { LSP } from "@/lsp/lsp"
@@ -22,7 +23,6 @@ import { InstanceLayer } from "@/project/instance-layer"
 import { Plugin } from "@/plugin"
 import { Project } from "@/project/project"
 import { ProviderAuth } from "@/provider/auth"
-import { ModelsDev } from "@/provider/models"
 import { Provider } from "@/provider/provider"
 import { Pty } from "@/pty"
 import { PtyTicket } from "@/pty/ticket"
@@ -151,11 +151,11 @@ export function createRoutes(corsOptions?: CorsOptions) {
       Config.defaultLayer,
       File.defaultLayer,
       FileWatcher.defaultLayer,
+      Git.defaultLayer,
       Format.defaultLayer,
       LSP.defaultLayer,
       Installation.defaultLayer,
       MCP.defaultLayer,
-      ModelsDev.defaultLayer,
       Permission.defaultLayer,
       Plugin.defaultLayer,
       Project.defaultLayer,

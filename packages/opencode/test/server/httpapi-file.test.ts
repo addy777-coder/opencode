@@ -12,16 +12,17 @@ void Log.init({ print: false })
 
 const context = Context.empty() as Context.Context<unknown>
 
-function request(route: string, directory: string, query?: Record<string, string>) {
+function request(route: string, directory: string, query?: Record<string, string>, init?: RequestInit) {
   const url = new URL(`http://localhost${route}`)
   for (const [key, value] of Object.entries(query ?? {})) {
     url.searchParams.set(key, value)
   }
+  const headers = new Headers(init?.headers)
+  headers.set("x-opencode-directory", directory)
   return ExperimentalHttpApiServer.webHandler().handler(
     new Request(url, {
-      headers: {
-        "x-opencode-directory": directory,
-      },
+      ...init,
+      headers,
     }),
     context,
   )
@@ -73,5 +74,38 @@ describe("file HttpApi", () => {
 
     expect(symbols.status).toBe(200)
     expect(await symbols.json()).toEqual([])
+  })
+
+  test("serves git status and file diff from the backend", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Bun.write(path.join(tmp.path, "hello.txt"), "hello")
+
+    const [status, diff] = await Promise.all([
+      request(FilePaths.gitStatus, tmp.path),
+      request(FilePaths.diff, tmp.path, undefined, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ files: ["hello.txt"] }),
+      }),
+    ])
+
+    expect(status.status).toBe(200)
+    expect(await status.json()).toMatchObject({
+      rootPath: expect.any(String),
+      branch: expect.any(String),
+      detached: false,
+      dirty: true,
+      ahead: 0,
+      behind: 0,
+    })
+
+    expect(diff.status).toBe(200)
+    expect(await diff.json()).toContainEqual(
+      expect.objectContaining({
+        file: "hello.txt",
+        additions: 1,
+        status: "added",
+      }),
+    )
   })
 })

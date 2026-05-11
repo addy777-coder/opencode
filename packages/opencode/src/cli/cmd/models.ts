@@ -2,9 +2,7 @@ import { EOL } from "os"
 import { Effect } from "effect"
 import { Provider } from "@/provider/provider"
 import { ProviderID } from "../../provider/schema"
-import { ModelsDev } from "@/provider/models"
 import { effectCmd, fail } from "../effect-cmd"
-import { UI } from "../ui"
 
 export const ModelsCommand = effectCmd({
   command: "models [provider]",
@@ -19,17 +17,8 @@ export const ModelsCommand = effectCmd({
       .option("verbose", {
         describe: "use more verbose model output (includes metadata like costs)",
         type: "boolean",
-      })
-      .option("refresh", {
-        describe: "refresh the models cache from models.dev",
-        type: "boolean",
       }),
   handler: Effect.fn("Cli.models")(function* (args) {
-    if (args.refresh) {
-      yield* ModelsDev.Service.use((s) => s.refresh(true))
-      UI.println(UI.Style.TEXT_SUCCESS_BOLD + "Models cache refreshed" + UI.Style.TEXT_NORMAL)
-    }
-
     const provider = yield* Provider.Service
     const providers = yield* provider.list()
 

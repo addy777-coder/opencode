@@ -1,0 +1,9 @@
+$ tauri dev
+     Running BeforeDevCommand (`bun run dev`)
+$ vite --host 127.0.0.1 --port 1420
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+        Info Watching D:\Desktop\开发工具\openCode\opencode\packages\gui\src-tauri for changes...
+[1m[92m   Compiling[0m opencode-gui v0.1.0 (D:\Desktop\开发工具\openCode\opencode\packages\gui\src-tauri)
+[1m[96m    Building[0m [=======================> ] 479/481: opencod…[1m[96m    Building[0m [=======================> ] 480/481: opencod…                                                            [1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 14.44s
+[1m[92m     Running[0m `target\debug\opencode-gui.exe`
+error: script "dev" exited with code 255
