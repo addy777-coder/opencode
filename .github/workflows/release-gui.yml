@@ -25,6 +25,15 @@ on:
         required: false
         default: false
         type: boolean
+      ios_export_method:
+        description: "iOS export method used when Apple signing secrets are configured."
+        required: false
+        default: "app-store-connect"
+        type: choice
+        options:
+          - app-store-connect
+          - release-testing
+          - debugging
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.version || github.run_id }}
@@ -57,6 +66,7 @@ jobs:
           $manualUpload = "${{ inputs.upload_release }}" -eq "true"
           $manualDraft = "${{ inputs.draft }}" -eq "true"
           $manualPrerelease = "${{ inputs.prerelease }}" -eq "true"
+          $manualIosExportMethod = "${{ inputs.ios_export_method }}".Trim()
 
           $packageJson = Get-Content -Raw "packages/gui/package.json" | ConvertFrom-Json
           $version = $packageJson.version
@@ -64,12 +74,17 @@ jobs:
           $uploadRelease = $false
           $draft = $false
           $prerelease = $false
+          $iosExportMethod = "app-store-connect"
 
           if ($eventName -eq "push" -and $refName.StartsWith("gui-v")) {
             $version = $refName.Substring(5)
             $tag = $refName
             $uploadRelease = $true
           } else {
+            if ($manualIosExportMethod -ne "") {
+              $iosExportMethod = $manualIosExportMethod
+            }
+
             if ($manualVersion -ne "") {
               $version = $manualVersion
               $tag = "gui-v$version"
@@ -93,6 +108,7 @@ jobs:
           "upload_release=$($uploadRelease.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           "draft=$($draft.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           "prerelease=$($prerelease.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "ios_export_method=$iosExportMethod" >> $env:GITHUB_OUTPUT
 
       - name: Setup Node
         uses: actions/setup-node@v5
@@ -183,7 +199,7 @@ jobs:
               "--title",
               $title,
               "--notes",
-              "OpenCode GUI Windows release.",
+              "OpenCode GUI release.",
               "--repo",
               $repo
             )
@@ -205,6 +221,216 @@ jobs:
 
           if (-not $assets) {
             throw "No release assets found in $assetDir."
+          }
+
+          foreach ($asset in $assets) {
+            gh release upload $tag $asset.FullName --clobber --repo $repo
+          }
+
+  ios-ipa:
+    name: iOS IPA
+    runs-on: macos-latest
+    needs: windows-installer
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Resolve release metadata
+        id: meta
+        run: |
+          $eventName = "${{ github.event_name }}"
+          $refName = "${{ github.ref_name }}"
+          $manualVersion = "${{ inputs.version }}".Trim()
+          $manualUpload = "${{ inputs.upload_release }}" -eq "true"
+          $manualDraft = "${{ inputs.draft }}" -eq "true"
+          $manualPrerelease = "${{ inputs.prerelease }}" -eq "true"
+          $manualIosExportMethod = "${{ inputs.ios_export_method }}".Trim()
+
+          $packageJson = Get-Content -Raw "packages/gui/package.json" | ConvertFrom-Json
+          $version = $packageJson.version
+          $tag = "gui-v$version"
+          $uploadRelease = $false
+          $draft = $false
+          $prerelease = $false
+          $iosExportMethod = "app-store-connect"
+
+          if ($eventName -eq "push" -and $refName.StartsWith("gui-v")) {
+            $version = $refName.Substring(5)
+            $tag = $refName
+            $uploadRelease = $true
+          } else {
+            if ($manualIosExportMethod -ne "") {
+              $iosExportMethod = $manualIosExportMethod
+            }
+
+            if ($manualVersion -ne "") {
+              $version = $manualVersion
+              $tag = "gui-v$version"
+            }
+
+            if ($manualUpload -and $manualVersion -eq "") {
+              throw "The version input is required when upload_release is true."
+            }
+
+            $uploadRelease = $manualUpload
+            $draft = $manualDraft
+            $prerelease = $manualPrerelease
+          }
+
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "Resolved GUI version is empty."
+          }
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "upload_release=$($uploadRelease.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "draft=$($draft.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "prerelease=$($prerelease.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "ios_export_method=$iosExportMethod" >> $env:GITHUB_OUTPUT
+
+      - name: Detect iOS signing configuration
+        id: signing
+        env:
+          IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_MOBILE_PROVISION: ${{ secrets.IOS_MOBILE_PROVISION }}
+        run: |
+          $missing = @()
+          if ([string]::IsNullOrWhiteSpace($env:IOS_CERTIFICATE)) {
+            $missing += "IOS_CERTIFICATE"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:IOS_CERTIFICATE_PASSWORD)) {
+            $missing += "IOS_CERTIFICATE_PASSWORD"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:IOS_MOBILE_PROVISION)) {
+            $missing += "IOS_MOBILE_PROVISION"
+          }
+
+          if ($missing.Count -gt 0) {
+            "configured=false" >> $env:GITHUB_OUTPUT
+            "### iOS packaging skipped" >> $env:GITHUB_STEP_SUMMARY
+            "" >> $env:GITHUB_STEP_SUMMARY
+            "Missing Apple signing secrets: $($missing -join ', ')." >> $env:GITHUB_STEP_SUMMARY
+            "Configure these repository secrets to build and upload an iOS IPA." >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            "configured=true" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Setup Node
+        if: steps.signing.outputs.configured == 'true'
+        uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+
+      - name: Setup Bun
+        if: steps.signing.outputs.configured == 'true'
+        uses: ./.github/actions/setup-bun
+
+      - name: Setup Rust
+        if: steps.signing.outputs.configured == 'true'
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-ios
+
+      - name: Sync GUI version
+        if: steps.signing.outputs.configured == 'true'
+        env:
+          GUI_VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:GUI_VERSION)) {
+            throw "Resolved GUI version is empty."
+          }
+
+          $packageJsonPath = "packages/gui/package.json"
+          $packageJson = Get-Content -Raw $packageJsonPath | ConvertFrom-Json
+          $packageJson.version = $env:GUI_VERSION
+          $packageJson | ConvertTo-Json -Depth 100 | Set-Content -NoNewline $packageJsonPath
+
+          $tauriConfigPath = "packages/gui/src-tauri/tauri.conf.json"
+          $tauriConfig = Get-Content -Raw $tauriConfigPath | ConvertFrom-Json
+          $tauriConfig.version = $env:GUI_VERSION
+          $tauriConfig | ConvertTo-Json -Depth 100 | Set-Content -NoNewline $tauriConfigPath
+
+          $cargoTomlPath = "packages/gui/src-tauri/Cargo.toml"
+          $cargoToml = Get-Content -Raw $cargoTomlPath
+          $cargoToml = $cargoToml -replace '(?m)^version = "[^"]+"', "version = `"$env:GUI_VERSION`""
+          Set-Content -NoNewline -Path $cargoTomlPath -Value $cargoToml
+
+      - name: Typecheck GUI
+        if: steps.signing.outputs.configured == 'true'
+        run: bun --cwd packages/gui typecheck
+
+      - name: Initialize Tauri iOS project
+        if: steps.signing.outputs.configured == 'true'
+        run: bun --cwd packages/gui tauri:ios:init
+
+      - name: Build Tauri iOS IPA
+        if: steps.signing.outputs.configured == 'true'
+        env:
+          IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_MOBILE_PROVISION: ${{ secrets.IOS_MOBILE_PROVISION }}
+          IOS_EXPORT_METHOD: ${{ steps.meta.outputs.ios_export_method }}
+        run: bun --cwd packages/gui tauri:ios:build -- --export-method $env:IOS_EXPORT_METHOD
+
+      - name: Upload iOS workflow artifact
+        if: steps.signing.outputs.configured == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: opencode-gui-ios-${{ steps.meta.outputs.version }}
+          if-no-files-found: error
+          path: packages/gui/src-tauri/gen/apple/build/**/*.ipa
+
+      - name: Upload iOS assets to GitHub Release
+        if: steps.signing.outputs.configured == 'true' && steps.meta.outputs.upload_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ steps.meta.outputs.tag }}"
+          $version = "${{ steps.meta.outputs.version }}"
+          $title = "OpenCode GUI $version"
+          $repo = $env:GITHUB_REPOSITORY
+
+          gh release view $tag --repo $repo *> $null
+          if ($LASTEXITCODE -ne 0) {
+            $releaseArgs = @(
+              "release",
+              "create",
+              $tag,
+              "--target",
+              $env:GITHUB_SHA,
+              "--title",
+              $title,
+              "--notes",
+              "OpenCode GUI release.",
+              "--repo",
+              $repo
+            )
+
+            if ("${{ steps.meta.outputs.draft }}" -eq "true") {
+              $releaseArgs += "--draft"
+            }
+
+            if ("${{ steps.meta.outputs.prerelease }}" -eq "true") {
+              $releaseArgs += "--prerelease"
+            }
+
+            gh @releaseArgs
+          }
+
+          $assetDir = "packages/gui/src-tauri/gen/apple/build"
+          $assets = Get-ChildItem -Path $assetDir -Recurse -File -Filter "*.ipa" -ErrorAction Stop
+
+          if (-not $assets) {
+            throw "No iOS IPA assets found in $assetDir."
           }
 
           foreach ($asset in $assets) {

@@ -9,6 +9,8 @@
     "preview": "vite preview",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
+    "tauri:ios:init": "tauri ios init --ci",
+    "tauri:ios:build": "tauri ios build",
     "test": "bun test ./src",
     "typecheck": "tsc --noEmit"
   },

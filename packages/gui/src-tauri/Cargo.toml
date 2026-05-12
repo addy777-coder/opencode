@@ -6,6 +6,10 @@ authors = ["OpenCode"]
 edition = "2021"
 rust-version = "1.77"
 
+[lib]
+name = "opencode_gui_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
