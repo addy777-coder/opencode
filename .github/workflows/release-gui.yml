@@ -134,7 +134,7 @@ jobs:
         run: bun --cwd packages/gui typecheck
 
       - name: Build OpenCode backend sidecar
-        run: bun --cwd packages/opencode run script/build.ts --single --baseline --skip-embed-web-ui
+        run: bun --cwd packages/opencode script/build.ts --single --baseline --skip-embed-web-ui
 
       - name: Stage OpenCode backend sidecar
         run: |
