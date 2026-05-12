@@ -134,11 +134,11 @@ jobs:
         run: bun --cwd packages/gui typecheck
 
       - name: Build OpenCode backend sidecar
-        run: bun --cwd packages/opencode script/build.ts --single --baseline --skip-embed-web-ui
+        run: bun --cwd packages/opencode script/build.ts --single --skip-install --skip-embed-web-ui
 
       - name: Stage OpenCode backend sidecar
         run: |
-          $source = "packages/opencode/dist/opencode-windows-x64-baseline/bin/opencode.exe"
+          $source = "packages/opencode/dist/opencode-windows-x64/bin/opencode.exe"
           if (-not (Test-Path $source)) {
             throw "OpenCode backend sidecar was not built at $source."
           }
