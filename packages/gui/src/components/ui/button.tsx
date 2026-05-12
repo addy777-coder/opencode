@@ -8,20 +8,13 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default:
-          "bg-[var(--app-text)] text-[var(--app-bg)] hover:opacity-90 active:opacity-80",
-        primary:
-          "bg-[var(--app-accent)] text-[var(--app-accent-contrast)] hover:opacity-90 active:opacity-85",
-        destructive:
-          "bg-[var(--app-danger)] text-white hover:opacity-90 active:opacity-85",
-        outline:
-          "border border-[var(--app-border)] bg-transparent text-[var(--app-text)] hover:bg-[var(--app-hover)]",
-        secondary:
-          "bg-[var(--app-hover)] text-[var(--app-text)] hover:bg-[var(--app-hover-strong)]",
-        ghost:
-          "text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
-        subtle:
-          "bg-[var(--app-panel-2)] text-[var(--app-text)] hover:bg-[var(--app-hover-strong)]",
+        default: "bg-[var(--app-text)] text-[var(--app-bg)] hover:opacity-90 active:opacity-80",
+        primary: "bg-[var(--app-accent)] text-[var(--app-accent-contrast)] hover:opacity-90 active:opacity-85",
+        destructive: "bg-[var(--app-danger)] text-white hover:opacity-90 active:opacity-85",
+        outline: "border border-[var(--app-border)] bg-transparent text-[var(--app-text)] hover:bg-[var(--app-hover)]",
+        secondary: "bg-[var(--app-hover)] text-[var(--app-text)] hover:bg-[var(--app-hover-strong)]",
+        ghost: "text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
+        subtle: "bg-[var(--app-panel-2)] text-[var(--app-text)] hover:bg-[var(--app-hover-strong)]",
         link: "text-[var(--app-accent)] underline-offset-4 hover:underline",
       },
       size: {
@@ -47,8 +40,12 @@ export interface ButtonProps
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant, size, asChild = false, ...props }, ref) => {
-    const Comp = asChild ? Slot : "button"
-    return <Comp className={cn(buttonVariants({ variant, size, className }))} ref={ref} {...props} />
+    const Comp = (asChild ? Slot : "button") as React.ElementType
+    return React.createElement(Comp, {
+      className: cn(buttonVariants({ variant, size, className })),
+      ref,
+      ...props,
+    })
   },
 )
 Button.displayName = "Button"
