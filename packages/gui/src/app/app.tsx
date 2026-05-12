@@ -2052,7 +2052,7 @@ export function App() {
 
   function ensureSelectedProviderReady() {
     if (!selectedModelInfo) {
-      throw new Error("请先到设置 > API 供应商添加供应商、获取模型并选择一个可用模型。")
+      throw new Error("请先到设置 > API 供应商添加供应商、添加或获取模型，并选择一个可用模型。")
     }
     const provider = resolvedGuiSettings.thirdPartyProviders.find((item) => item.id === selectedModelInfo.providerId)
     if (!provider) {

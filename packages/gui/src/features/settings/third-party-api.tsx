@@ -205,14 +205,6 @@ export function ThirdPartyApiSettings({
       if (!provider.authStored && !apiKey) {
         throw new Error("首次应用供应商时需要输入 API Key。")
       }
-      if (apiKey) {
-        await thirdPartyProviderModels({
-          requestUrl: provider.baseUrl,
-          apiKey,
-          protocol: provider.protocol,
-          headers: provider.headers,
-        })
-      }
       await thirdPartyProviderApply({
         baseUrl,
         provider: thirdPartyProviderRuntimeConfig(provider),
@@ -244,7 +236,7 @@ export function ThirdPartyApiSettings({
       setApiKeys((current) => ({ ...current, [provider.id]: "", [savedProvider.id]: "" }))
       setNotice({
         tone: "success",
-        text: "已写入 OpenCode provider 配置。是否出现在模型选择器、是否作为默认来源，由开关和“设为默认”单独控制。",
+        text: "已写入 OpenCode provider 配置。手动添加的模型会直接保存；是否出现在模型选择器、是否作为默认来源，由开关和“设为默认”单独控制。",
       })
       void queryClient.invalidateQueries({ queryKey: ["execution-options"] })
     },
@@ -615,7 +607,7 @@ function ProviderSummaryCard({
     : !provider.authStored
       ? "先填写 API Key，并应用到 OpenCode"
       : !valid
-        ? "请先补全 Base URL 和模型列表"
+        ? "请先补全 Base URL 和模型 ID"
         : active
           ? "已经是默认模型来源"
           : "设为工作台默认模型来源"

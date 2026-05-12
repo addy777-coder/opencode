@@ -22,6 +22,8 @@ const BUNDLED_SERVER_BINARY_NAME: &str = if cfg!(windows) {
 } else {
     "opencode-server"
 };
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 type CodexRecommendationCache = Option<(SystemTime, Vec<SkillRecommendationInfo>)>;
 static CODEX_RECOMMENDATION_CACHE: OnceLock<Mutex<CodexRecommendationCache>> = OnceLock::new();
@@ -451,6 +453,8 @@ fn dev_source_server_command(server_args: &[String]) -> Result<Command, String> 
 }
 
 fn spawn_local_server(mut command: Command, launcher: &str) -> Result<Child, String> {
+    hide_windows_console(&mut command);
+
     let child = command
         .env("OPENCODE_CLIENT", "desktop")
         .stdin(Stdio::null())
@@ -503,7 +507,10 @@ pub async fn wait_until_healthy(base_url: &str, attempts: usize) -> bool {
 pub async fn stop_local_server(mut child: Child) {
     if cfg!(windows) {
         if let Some(pid) = child.id() {
-            let _ = Command::new("taskkill")
+            let mut command = Command::new("taskkill");
+            hide_windows_console(&mut command);
+
+            let _ = command
                 .args(["/PID", &pid.to_string(), "/T", "/F"])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -525,6 +532,14 @@ fn repo_root() -> Result<PathBuf, String> {
         .map(PathBuf::from)
         .ok_or_else(|| "无法定位 OpenCode 仓库根目录".to_string())
 }
+
+#[cfg(windows)]
+fn hide_windows_console(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn hide_windows_console(_command: &mut Command) {}
 
 pub async fn list_sessions(
     base_url: &str,

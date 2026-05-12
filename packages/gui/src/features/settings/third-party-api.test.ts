@@ -3,6 +3,7 @@ import {
   canUseThirdPartyProviderAsDefault,
   normalizeThirdPartyProviders,
   providerPatchFromFetchedModels,
+  thirdPartyProviderRuntimeConfig,
   type GuiThirdPartyProvider,
 } from "./third-party-api"
 
@@ -68,5 +69,31 @@ describe("API provider model loading", () => {
     expect(canUseThirdPartyProviderAsDefault({ ...provider, enabled: false })).toBe(false)
     expect(canUseThirdPartyProviderAsDefault({ ...provider, authStored: false })).toBe(false)
     expect(canUseThirdPartyProviderAsDefault({ ...provider, models: [] })).toBe(false)
+  })
+
+  test("uses manually entered models in the OpenCode runtime config", () => {
+    const provider: GuiThirdPartyProvider = {
+      id: "manual-provider",
+      name: "Manual Provider",
+      protocol: "openai-compatible",
+      baseUrl: "https://api.example.test/v1",
+      models: [" manual-model ", "manual-model", "manual-small"],
+      defaultModel: "manual-small",
+      headers: "",
+      timeout: 300_000,
+      chunkTimeout: 60_000,
+      contextLimit: 128_000,
+      outputLimit: 16_384,
+      supportsReasoning: true,
+      supportsAttachment: false,
+      enabled: true,
+      authStored: false,
+      note: "",
+    }
+
+    expect(thirdPartyProviderRuntimeConfig(provider)).toMatchObject({
+      models: ["manual-model", "manual-small"],
+      defaultModel: "manual-small",
+    })
   })
 })

@@ -3855,7 +3855,7 @@ function ModelSettings({
             })
           ) : (
             <div className="px-5 py-8 text-sm font-medium text-[var(--app-muted)]">
-              {activeModels.length ? "没有匹配的模型" : "在 API 供应商设置里获取模型列表后，可在这里收藏或隐藏模型。"}
+              {activeModels.length ? "没有匹配的模型" : "在 API 供应商设置里添加或获取模型后，可在这里收藏或隐藏模型。"}
             </div>
           )}
         </div>
