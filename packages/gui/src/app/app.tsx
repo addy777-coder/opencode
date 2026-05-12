@@ -96,6 +96,7 @@ import {
   getOpenCodeSessionStatusType as syncGetOpenCodeSessionStatusType,
 } from "@/features/sync/opencode-event"
 import { syncQueryKeys } from "@/features/sync/query-keys"
+import { filterVisibleSidebarSessions } from "@/features/sync/session-visibility"
 import {
   appInit,
   commandList,
@@ -844,17 +845,17 @@ function themeVars(settings?: Partial<GuiSettings> | null): CSSProperties {
   const accent = useLight ? merged.lightAccent : merged.darkAccent
   const background = useLight ? merged.lightBackground : merged.darkBackground
   const foreground = useLight ? merged.lightForeground : merged.darkForeground
-  const panel = useLight ? "#ffffff" : "#202020"
-  const panel2 = useLight ? "#f3f2ef" : "#1f1f1f"
-  const chrome = useLight ? "#f0efec" : "#202020"
+  const panel = useLight ? "#fbfaf8" : "#202020"
+  const panel2 = useLight ? "#efeeeb" : "#1f1f1f"
+  const chrome = useLight ? "#efeeeb" : "#202020"
   const input = useLight ? "#ffffff" : "#2d2d2d"
-  const border = useLight ? "rgba(45,45,43,0.14)" : "rgba(255,255,255,0.08)"
-  const divider = useLight ? "rgba(45,45,43,0.10)" : "rgba(255,255,255,0.06)"
+  const border = useLight ? "rgba(45,45,43,0.13)" : "rgba(255,255,255,0.08)"
+  const divider = useLight ? "rgba(45,45,43,0.09)" : "rgba(255,255,255,0.06)"
   const muted = useLight ? "rgba(45,45,43,0.58)" : "rgba(249,249,247,0.52)"
   const subtle = useLight ? "rgba(45,45,43,0.42)" : "rgba(249,249,247,0.36)"
-  const hover = useLight ? "rgba(45,45,43,0.08)" : "rgba(255,255,255,0.07)"
-  const hoverStrong = useLight ? "rgba(45,45,43,0.12)" : "rgba(255,255,255,0.12)"
-  const selected = useLight ? "rgba(45,45,43,0.10)" : "rgba(255,255,255,0.10)"
+  const hover = useLight ? "rgba(45,45,43,0.07)" : "rgba(255,255,255,0.07)"
+  const hoverStrong = useLight ? "rgba(45,45,43,0.11)" : "rgba(255,255,255,0.12)"
+  const selected = useLight ? "rgba(45,45,43,0.105)" : "rgba(255,255,255,0.10)"
   const composer = useLight ? "#ffffff" : "#2b2b2b"
   const inspector = useLight ? "#f4f3f0" : "#171717"
   const code = useLight ? "rgba(45,45,43,0.06)" : "rgba(0,0,0,0.30)"
@@ -1024,7 +1025,7 @@ export function App() {
     enabled: Boolean(server?.healthy && server?.baseUrl && workspace?.path),
   })
   const activeSessions = useMemo(
-    () => (sessions.data ?? []).filter((session) => !session.archivedAt),
+    () => filterVisibleSidebarSessions(sessions.data),
     [sessions.data],
   )
 
@@ -2758,7 +2759,7 @@ export function App() {
       data-theme={resolvedThemeMode(resolvedGuiSettings)}
     >
       <header
-        className="flex h-11 shrink-0 items-center border-b border-[var(--app-divider)] bg-[var(--app-chrome)]"
+        className="flex h-[52px] shrink-0 items-center border-b border-[var(--app-divider)] bg-[var(--app-chrome)]"
         onMouseDown={handleTitlebarMouseDown}
       >
         <div ref={titleMenuRegionRef} className="relative flex h-full min-w-0 flex-1 items-center gap-1 px-2">
@@ -2785,7 +2786,7 @@ export function App() {
           >
             <ChevronRightIcon className="h-4 w-4" />
           </button>
-          <nav className="ml-3 flex min-w-0 items-center gap-1 text-[13px] font-medium text-[var(--app-muted)]">
+          <nav className="ml-5 flex min-w-0 items-center gap-1 text-[13px] font-medium text-[var(--app-muted)]">
             {appMenus.map((menu) => (
               <button
                 key={menu.id}
@@ -2811,7 +2812,6 @@ export function App() {
               onOpenWorkspace={workspace?.path ? () => openUserPath(workspace.path) : undefined}
               onSearch={() => {
                 switchView("workbench")
-                setSidebarCollapsed(false)
                 setUtilityPanel("search")
               }}
               onWorkbench={() => switchView("workbench")}
@@ -2870,8 +2870,8 @@ export function App() {
       ) : (
       <div className="flex min-h-0 flex-1">
         {!sidebarCollapsed ? (
-        <aside className="flex w-[286px] shrink-0 flex-col border-r border-[var(--app-border)] bg-[var(--app-panel)]">
-          <div className="space-y-1 px-2 py-3">
+        <aside className="flex w-[348px] shrink-0 flex-col border-r border-[var(--app-border)] bg-[var(--app-panel)]">
+          <div className="space-y-1 px-2.5 py-4">
             {primaryNav.map((item) => {
               const Icon = item.icon
               const disabled = item.disabled
@@ -2881,7 +2881,7 @@ export function App() {
                 <button
                   key={item.id}
                   className={cn(
-                    "flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] font-medium transition-colors",
+                    "flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-medium transition-colors",
                     disabled
                       ? "cursor-not-allowed text-[var(--app-subtle)] opacity-45"
                       : selected
@@ -2900,10 +2900,10 @@ export function App() {
                     setUtilityPanel((value) => (value === item.id ? null : item.id))
                   }}
                 >
-                  <Icon className="h-4 w-4 shrink-0" />
+                  <Icon className="h-[18px] w-[18px] shrink-0" />
                   <span className="min-w-0 flex-1">{item.label}</span>
                   {item.shortcut ? (
-                    <span className="rounded-md border border-[var(--app-border)] px-1.5 py-0.5 font-mono text-[10px] tracking-tight text-[var(--app-subtle)]">
+                    <span className="rounded-md border border-[var(--app-border)] bg-[var(--app-input)] px-1.5 py-0.5 font-mono text-[10px] tracking-tight text-[var(--app-subtle)]">
                       {item.shortcut}
                     </span>
                   ) : null}
@@ -2912,7 +2912,7 @@ export function App() {
             })}
           </div>
 
-          {utilityPanel && utilityPanel !== "skills" ? (
+          {utilityPanel && utilityPanel !== "skills" && utilityPanel !== "search" ? (
             <UtilityPanelView
               panel={utilityPanel}
               baseUrl={connectedBaseUrl}
@@ -2929,7 +2929,7 @@ export function App() {
             />
           ) : null}
 
-          <div className="flex items-center gap-1 px-3 pb-1.5 pt-5">
+          <div className="flex items-center gap-1 px-4 pb-2 pt-6">
             <button
               type="button"
               className="mr-auto inline-flex h-7 max-w-full items-center gap-1 rounded-md px-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--app-subtle)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
@@ -2985,15 +2985,13 @@ export function App() {
           </div>
 
           <ScrollArea className="min-h-0 flex-1">
-            <div className="space-y-3 px-2 pb-4">
+            <div className="space-y-3 px-3 pb-4">
               {sidebarProjects.length ? (
                 sidebarProjects.map((item, index) => {
                   const projectSessions = sidebarSessionQueries[index]
                   const isActiveProject = workspace?.path === item.path
                   const isExpanded = expandedProjectIds.has(item.id)
-                  const projectThreads: SidebarThread[] = (projectSessions.data ?? [])
-                    .filter((session) => !session.archivedAt)
-                    .map((session) => {
+                  const projectThreads: SidebarThread[] = filterVisibleSidebarSessions(projectSessions.data).map((session) => {
                     const state = resolvedSessionUiState[session.id] ?? {}
                     return {
                       id: session.id,
@@ -3011,38 +3009,38 @@ export function App() {
                   })
 
                   return (
-                  <ProjectGroup
-                    key={item.id}
-                    name={item.name ?? getPathName(item.path)}
-                    path={item.path}
-                    selected={!utilityPanel && isActiveProject && !activeThread}
-                    active={!utilityPanel && isActiveProject}
-                    expanded={isExpanded}
-                    activeThreadId={utilityPanel ? undefined : activeThread?.id}
-                    loading={projectSessions.isFetching || (isActiveProject && submitPrompt.isPending)}
-                    removeBusy={removeWorkspace.isPending && removeWorkspace.variables?.id === item.id}
-                    threads={projectThreads}
-                    onToggleExpanded={() => toggleProjectExpanded(item.id)}
-                    onSelect={() => {
-                      if (!isExpanded) toggleProjectExpanded(item.id)
-                      selectWorkspace.mutate(item)
-                    }}
-                    onThreadSelect={(id) => selectSidebarThread(item, id)}
-                    onThreadRename={(thread) => void renameSidebarThread(item, thread)}
-                    onThreadArchive={(thread) => archiveSidebarThread(item, thread)}
-                    onThreadStateChange={(thread, patch) => {
-                      if (thread.id) patchSessionUiState(thread.id, patch)
-                    }}
-                    onThreadForkLocal={(thread) => forkThread.mutate({ workspace: item, thread })}
-                    onThreadDelete={(thread) => deleteSidebarThread(item, thread)}
-                    onCreateThread={() => startNewThread(item)}
-                    createBusy={createThread.isPending && createThread.variables?.id === item.id}
-                    createDisabled={createThread.isPending}
-                    onRemove={() => removeWorkspace.mutate(item)}
-                    deleteBusy={deleteThread.isPending && deleteThread.variables?.workspace.id === item.id}
-                    forkBusy={forkThread.isPending && forkThread.variables?.workspace.id === item.id}
-                    archiveBusy={archiveThread.isPending && archiveThread.variables?.project.id === item.id}
-                  />
+                    <ProjectGroup
+                      key={item.id}
+                      name={item.name ?? getPathName(item.path)}
+                      path={item.path}
+                      selected={!utilityPanel && isActiveProject && !activeThread}
+                      active={!utilityPanel && isActiveProject}
+                      expanded={isExpanded}
+                      activeThreadId={utilityPanel ? undefined : activeThread?.id}
+                      loading={projectSessions.isFetching || (isActiveProject && submitPrompt.isPending)}
+                      removeBusy={removeWorkspace.isPending && removeWorkspace.variables?.id === item.id}
+                      threads={projectThreads}
+                      onToggleExpanded={() => toggleProjectExpanded(item.id)}
+                      onSelect={() => {
+                        if (!isExpanded) toggleProjectExpanded(item.id)
+                        selectWorkspace.mutate(item)
+                      }}
+                      onThreadSelect={(id) => selectSidebarThread(item, id)}
+                      onThreadRename={(thread) => void renameSidebarThread(item, thread)}
+                      onThreadArchive={(thread) => archiveSidebarThread(item, thread)}
+                      onThreadStateChange={(thread, patch) => {
+                        if (thread.id) patchSessionUiState(thread.id, patch)
+                      }}
+                      onThreadForkLocal={(thread) => forkThread.mutate({ workspace: item, thread })}
+                      onThreadDelete={(thread) => deleteSidebarThread(item, thread)}
+                      onCreateThread={() => startNewThread(item)}
+                      createBusy={createThread.isPending && createThread.variables?.id === item.id}
+                      createDisabled={createThread.isPending}
+                      onRemove={() => removeWorkspace.mutate(item)}
+                      deleteBusy={deleteThread.isPending && deleteThread.variables?.workspace.id === item.id}
+                      forkBusy={forkThread.isPending && forkThread.variables?.workspace.id === item.id}
+                      archiveBusy={archiveThread.isPending && archiveThread.variables?.project.id === item.id}
+                    />
                   )
                 })
               ) : (
@@ -3150,6 +3148,29 @@ export function App() {
         </main>
       </div>
       )}
+      {utilityPanel === "search" ? (
+        <UtilityPanelView
+          panel={utilityPanel}
+          baseUrl={connectedBaseUrl}
+          directory={workspace?.path}
+          threads={threads}
+          workspaces={recentProjects}
+          activeThreadId={activeThread?.id}
+          onThreadSelect={(id) => {
+            setUtilityPanel(null)
+            setActiveThreadId(id)
+          }}
+          onWorkspaceSelect={(item) => {
+            setUtilityPanel(null)
+            selectWorkspace.mutate(item)
+          }}
+          onOpenPath={(path) => {
+            setUtilityPanel(null)
+            openUserPath(path)
+          }}
+          onClose={() => setUtilityPanel(null)}
+        />
+      ) : null}
       {renameThreadDraft ? (
         <RenameThreadDialog
           value={renameThreadDraft.value}
@@ -3463,6 +3484,7 @@ function UtilityPanelView({
   onThreadSelect,
   onWorkspaceSelect,
   onOpenPath,
+  onClose,
 }: {
   panel: UtilityPanel
   baseUrl?: string
@@ -3473,6 +3495,7 @@ function UtilityPanelView({
   onThreadSelect: (id: string) => void
   onWorkspaceSelect: (workspace: WorkspaceRecord) => void
   onOpenPath: (path: string) => void
+  onClose?: () => void
 }) {
   const [query, setQuery] = useState("")
   const [searchMode, setSearchMode] = useState<UtilitySearchMode>("all")
@@ -3485,12 +3508,19 @@ function UtilityPanelView({
     error: null,
   })
   const searchRequestId = useRef(0)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const normalizedQuery = query.trim()
   const lowerQuery = normalizedQuery.toLowerCase()
   const filteredThreads = threads.filter((thread) => thread.title.toLowerCase().includes(lowerQuery)).slice(0, 8)
   const filteredWorkspaces = workspaces
     .filter((workspace) => `${workspace.name ?? ""} ${workspace.path}`.toLowerCase().includes(lowerQuery))
     .slice(0, 5)
+
+  useEffect(() => {
+    if (panel !== "search") return
+    const timer = window.setTimeout(() => searchInputRef.current?.focus(), 0)
+    return () => window.clearTimeout(timer)
+  }, [panel])
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(normalizedQuery), 220)
@@ -3563,51 +3593,77 @@ function UtilityPanelView({
       !showWorkspaceHint
 
     return (
-      <div className="border-y border-[var(--app-divider)] px-3 py-3">
-        <div className="flex h-9 items-center gap-2 rounded-md border border-[var(--app-border)] bg-[var(--app-input)] px-3">
-          <SearchIcon className="h-4 w-4 text-[var(--app-muted)]" />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            className="min-w-0 flex-1 bg-transparent text-sm font-medium text-[var(--app-text)] outline-none placeholder:text-[var(--app-muted)]"
-            placeholder="搜索会话、项目、文件、内容"
-          />
-          {backendSearch.loading ? <Loader2Icon className="h-3.5 w-3.5 shrink-0 animate-spin text-[var(--app-muted)]" /> : null}
-          {query ? (
+      <div
+        className="fixed inset-0 z-[110] flex items-start justify-center bg-black/35 px-4 py-[9vh]"
+        data-no-window-drag
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) onClose?.()
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") onClose?.()
+        }}
+      >
+        <section
+          role="dialog"
+          aria-modal="true"
+          aria-label="搜索"
+          className="flex max-h-[82vh] w-full max-w-[720px] flex-col overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-panel)] shadow-2xl shadow-black/35"
+        >
+          <div className="flex items-center gap-2 border-b border-[var(--app-divider)] p-3">
+            <div className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-md border border-[var(--app-border)] bg-[var(--app-input)] px-3">
+              <SearchIcon className="h-4 w-4 shrink-0 text-[var(--app-muted)]" />
+              <input
+                ref={searchInputRef}
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                className="min-w-0 flex-1 bg-transparent text-sm font-medium text-[var(--app-text)] outline-none placeholder:text-[var(--app-muted)]"
+                placeholder="搜索会话、项目、文件、内容"
+              />
+              {backendSearch.loading ? <Loader2Icon className="h-3.5 w-3.5 shrink-0 animate-spin text-[var(--app-muted)]" /> : null}
+              {query ? (
+                <button
+                  type="button"
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+                  title="清空搜索"
+                  onClick={() => setQuery("")}
+                >
+                  <XIcon className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
+            </div>
             <button
               type="button"
-              className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
-              title="清空搜索"
-              onClick={() => setQuery("")}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+              title="关闭搜索"
+              onClick={onClose}
             >
-              <XIcon className="h-3.5 w-3.5" />
+              <XIcon className="h-4 w-4" />
             </button>
-          ) : null}
-        </div>
-        <div className="mt-2 grid grid-cols-4 gap-1 rounded-md bg-[var(--app-hover)] p-1">
-          {UTILITY_SEARCH_MODES.map((mode) => {
-            const Icon = mode.icon
-            const selected = searchMode === mode.id
-            return (
-              <button
-                key={mode.id}
-                type="button"
-                className={cn(
-                  "flex h-7 min-w-0 items-center justify-center gap-1 rounded px-1.5 text-[11px] font-semibold transition-colors",
-                  selected
-                    ? "bg-[var(--app-panel)] text-[var(--app-text)] shadow-sm"
-                    : "text-[var(--app-muted)] hover:text-[var(--app-text)]",
-                )}
-                title={mode.label}
-                onClick={() => setSearchMode(mode.id)}
-              >
-                <Icon className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">{mode.label}</span>
-              </button>
-            )
-          })}
-        </div>
-        <div className="mt-3 max-h-[380px] space-y-3 overflow-y-auto pr-1">
+          </div>
+          <div className="grid grid-cols-4 gap-1 border-b border-[var(--app-divider)] bg-[var(--app-panel-2)] p-2">
+            {UTILITY_SEARCH_MODES.map((mode) => {
+              const Icon = mode.icon
+              const selected = searchMode === mode.id
+              return (
+                <button
+                  key={mode.id}
+                  type="button"
+                  className={cn(
+                    "flex h-8 min-w-0 items-center justify-center gap-1.5 rounded px-2 text-[12px] font-semibold transition-colors",
+                    selected
+                      ? "bg-[var(--app-panel)] text-[var(--app-text)] shadow-sm"
+                      : "text-[var(--app-muted)] hover:text-[var(--app-text)]",
+                  )}
+                  title={mode.label}
+                  onClick={() => setSearchMode(mode.id)}
+                >
+                  <Icon className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">{mode.label}</span>
+                </button>
+              )
+            })}
+          </div>
+          <div className="min-h-[220px] flex-1 space-y-3 overflow-y-auto px-3 py-3">
           {showLocal && filteredThreads.length > 0 ? (
             <div className="space-y-1">
               <SearchGroupHeader label="会话" count={filteredThreads.length} />
@@ -3619,7 +3675,10 @@ function UtilityPanelView({
                     "flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-sm font-medium hover:bg-[var(--app-hover)]",
                     activeThreadId === thread.id ? "text-[var(--app-text)]" : "text-[var(--app-muted)] hover:text-[var(--app-text)]",
                   )}
-                  onClick={() => onThreadSelect(thread.id)}
+                  onClick={() => {
+                    onClose?.()
+                    onThreadSelect(thread.id)
+                  }}
                 >
                   <MailIcon className="h-3.5 w-3.5 shrink-0 text-[var(--app-subtle)]" />
                   <span className="min-w-0 flex-1 truncate">{thread.title}</span>
@@ -3637,7 +3696,10 @@ function UtilityPanelView({
                   key={workspace.id}
                   type="button"
                   className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-sm font-medium text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
-                  onClick={() => onWorkspaceSelect(workspace)}
+                  onClick={() => {
+                    onClose?.()
+                    onWorkspaceSelect(workspace)
+                  }}
                 >
                   <FolderIcon className="h-4 w-4 shrink-0 text-[var(--app-muted)]" />
                   <span className="min-w-0 flex-1 truncate">{workspace.name ?? getPathName(workspace.path)}</span>
@@ -3654,7 +3716,10 @@ function UtilityPanelView({
                   key={`file:${path}`}
                   type="button"
                   className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-sm font-medium text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
-                  onClick={() => onOpenPath(resolveWorkspacePath(path, workspaceDirectory))}
+                  onClick={() => {
+                    onClose?.()
+                    onOpenPath(resolveWorkspacePath(path, workspaceDirectory))
+                  }}
                 >
                   <FolderIcon className="h-4 w-4 shrink-0 text-[var(--app-subtle)]" />
                   <span className="min-w-0 flex-1 truncate">{displaySearchPath(path, workspaceDirectory)}</span>
@@ -3671,7 +3736,10 @@ function UtilityPanelView({
                   key={`text:${match.path}:${match.lineNumber}:${match.absoluteOffset}`}
                   type="button"
                   className="flex w-full min-w-0 flex-col gap-0.5 rounded-md px-2 py-2 text-left hover:bg-[var(--app-hover)]"
-                  onClick={() => onOpenPath(resolveWorkspacePath(match.path, workspaceDirectory))}
+                  onClick={() => {
+                    onClose?.()
+                    onOpenPath(resolveWorkspacePath(match.path, workspaceDirectory))
+                  }}
                 >
                   <span className="flex w-full min-w-0 items-center gap-2 text-[13px] font-medium text-[var(--app-text)]">
                     <FileTextIcon className="h-3.5 w-3.5 shrink-0 text-[var(--app-subtle)]" />
@@ -3701,7 +3769,10 @@ function UtilityPanelView({
                     className="flex w-full min-w-0 flex-col gap-0.5 rounded-md px-2 py-2 text-left hover:bg-[var(--app-hover)] disabled:cursor-default disabled:opacity-70"
                     disabled={!path}
                     onClick={() => {
-                      if (path) onOpenPath(resolveWorkspacePath(path, workspaceDirectory))
+                      if (path) {
+                        onClose?.()
+                        onOpenPath(resolveWorkspacePath(path, workspaceDirectory))
+                      }
                     }}
                   >
                     <span className="flex w-full min-w-0 items-center gap-2 text-[13px] font-medium text-[var(--app-text)]">
@@ -3725,7 +3796,8 @@ function UtilityPanelView({
           {showWorkspaceHint ? <SearchStatusRow text="先选择项目" /> : null}
           {workspaceDirectory && !canSearchBackend && searchMode !== "all" ? <SearchStatusRow text="输入至少 2 个字符" /> : null}
           {showEmpty ? <SearchStatusRow text="没有匹配结果" /> : null}
-        </div>
+          </div>
+        </section>
       </div>
     )
   }

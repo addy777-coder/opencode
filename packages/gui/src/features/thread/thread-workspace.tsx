@@ -54,6 +54,16 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { parsePromptTrigger, type PromptTrigger } from "@/features/prompt/triggers"
 import { TerminalWorkspace } from "@/features/terminal/terminal-workspace"
+import { shouldShowStandaloneThreadDiffSummary } from "@/features/thread/thread-diff-summary"
+import {
+  fallbackProgressStepsFromActivities,
+  generatedResultsFromDiffs,
+  sourceSummariesFromActivities,
+  type ProgressGeneratedResult,
+  type ProgressSourceSummary,
+  type ProgressSummaryStatus,
+  type ProgressSummaryStep,
+} from "@/features/thread/thread-progress-summary"
 import { MessageMarkdown, type LocalFileLinkPosition } from "@/features/thread/markdown"
 import { fileSearch, openPath, openUrl, readFilePreview, workspaceFileDiffs } from "@/lib/tauri"
 import { useOutsideClick } from "@/lib/use-outside-click"
@@ -1374,6 +1384,11 @@ export function ThreadWorkspace({
     )
     return [...confirmed, ...pending].sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0))
   }, [scopedMessages, optimisticMessages, streamingPartText])
+  const showStandaloneDiffSummary = useMemo(
+    () => shouldShowStandaloneThreadDiffSummary(orderedMessages, normalizedDiffs),
+    [orderedMessages, normalizedDiffs],
+  )
+  const standaloneDiffs = showStandaloneDiffSummary ? normalizedDiffs : []
   const selectedPermission = permissionOptions.find((item) => item.id === permissionMode)
   const running = Boolean(isRunning && thread && !thread.local)
   const submitting = isBusy && !running
@@ -2035,7 +2050,7 @@ export function ThreadWorkspace({
 
         <div className="relative min-h-0 flex-1">
           <ScrollArea ref={scrollRef} className="h-full">
-            <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col px-6 pb-52 pt-6">
+            <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col px-6 pb-80 pt-6">
               {emptyState ? null : displayMessages.length ? (
                 <div className="flex flex-col">
                   {displayMessages.map((message, index) => {
@@ -2047,8 +2062,8 @@ export function ThreadWorkspace({
                     const sourceIndex = orderedMessages.findIndex((item) => item.id === message.id)
                     const nextMessageId = sourceIndex >= 0 ? orderedMessages[sourceIndex + 1]?.id ?? null : null
                     const messageDiffs = sourceIndex >= 0
-                      ? turnDiffsForMessage(message, orderedMessages, sourceIndex, normalizedDiffs, effectiveWorkspaceDirectory)
-                      : normalizedDiffs
+                      ? turnDiffsForMessage(message, orderedMessages, sourceIndex, standaloneDiffs, effectiveWorkspaceDirectory)
+                      : standaloneDiffs
                     const mergedRunBlocks = adjacentRunBlocks.mergedByMessageId[message.id]
                     const hiddenRunBlocks = adjacentRunBlocks.hiddenByMessageId[message.id]
                     const flow = message.role === "assistant" ? assistantFlowItems(message) : []
@@ -2113,9 +2128,9 @@ export function ThreadWorkspace({
                       <ActivityRunGroup activities={scopedActivities.slice(0, 8)} running={running} onTerminalOpen={openTerminalInPanel} />
                     </div>
                   ) : null}
-                  {normalizedDiffs.length ? (
+                  {standaloneDiffs.length ? (
                     <div className="mt-5">
-                      <DiffSummaryCard diffs={normalizedDiffs} onOpenDiff={openDiffInPanel} onOpenReview={openReviewInPanel} />
+                      <DiffSummaryCard diffs={standaloneDiffs} onOpenDiff={openDiffInPanel} onOpenReview={openReviewInPanel} />
                     </div>
                   ) : null}
                   {onQuestionReply && onQuestionReject
@@ -2142,6 +2157,7 @@ export function ThreadWorkspace({
             <FloatingProgressWindow
               items={progressItems}
               todos={todoSteps}
+              diffs={normalizedDiffs}
               running={progressRunning}
               interrupted={progressInterrupted}
               pinned={progressPinned}
@@ -2152,19 +2168,19 @@ export function ThreadWorkspace({
 
           <div
             className={cn(
-              "pointer-events-none absolute inset-x-0 flex justify-center px-8",
+              "pointer-events-none absolute inset-x-0 flex justify-center px-10",
               emptyState
-                ? "top-1/2 -translate-y-1/2"
-                : "bottom-0 bg-gradient-to-t from-[var(--app-bg)] via-[var(--app-bg)] to-transparent pb-7 pt-20",
+                ? "top-[48%] -translate-y-1/2"
+                : "bottom-0 bg-gradient-to-t from-[var(--app-bg)] via-[var(--app-bg)] to-transparent pb-3 pt-32 sm:pb-4",
             )}
           >
             <div className="pointer-events-auto w-full max-w-[920px]">
               {emptyState ? (
-                <div className="mb-6 text-center">
-                  <h2 className="text-[32px] font-semibold tracking-normal text-[var(--app-text)]">
+                <div className="mb-7 text-center">
+                  <h2 className="text-[36px] font-semibold leading-tight tracking-normal text-[var(--app-text)]">
                     我们该做什么？
                   </h2>
-                  <div className="mt-4 flex flex-wrap justify-center gap-2">
+                  <div className="mt-5 flex flex-wrap justify-center gap-2.5">
                     <GuideChip label="@ 引用文件" />
                     <GuideChip label="/ 使用命令" />
                     <GuideChip label="Esc 中断当前回合" />
@@ -2174,7 +2190,7 @@ export function ThreadWorkspace({
               <div
                 ref={composerRef}
                 className={cn(
-                  "relative rounded-3xl border border-[var(--app-border)] bg-[var(--app-composer)] p-3 shadow-lg shadow-black/15 transition-[border-color,background-color] focus-within:border-[color-mix(in_srgb,var(--app-text)_22%,transparent)] focus-within:shadow-xl focus-within:shadow-black/20",
+                  "relative rounded-[24px] border border-[var(--app-border)] bg-[var(--app-composer)] px-5 py-3.5 shadow-2xl shadow-black/10 transition-[border-color,background-color,box-shadow] focus-within:border-[color-mix(in_srgb,var(--app-text)_22%,transparent)] focus-within:shadow-[0_22px_48px_rgba(0,0,0,0.16)] sm:px-6 sm:py-4",
                   dragOver && "border-[var(--app-accent)] bg-[var(--app-hover)]",
                 )}
                 onDrop={handleDrop}
@@ -2261,7 +2277,7 @@ export function ThreadWorkspace({
                   </div>
                 ) : null}
                 {attachments.length ? (
-                  <div className="mb-2 flex max-h-[92px] flex-wrap gap-2 overflow-auto">
+                  <div className="mb-3 flex max-h-[112px] flex-wrap gap-2 overflow-auto">
                     {attachments.map((attachment) => (
                       <AttachmentChip
                         key={attachment.id}
@@ -2286,14 +2302,14 @@ export function ThreadWorkspace({
                   onPaste={handlePaste}
                   onKeyDown={handleComposerKeyDown}
                   rows={1}
-                  className="block max-h-60 min-h-[40px] w-full resize-none bg-transparent px-2 py-1.5 text-[length:var(--app-prose-font-size)] leading-[1.55] text-[var(--app-text)] outline-none placeholder:text-[var(--app-muted)]"
+                  className="block max-h-60 min-h-[36px] w-full resize-none bg-transparent px-1 py-1.5 text-[length:var(--app-prose-font-size)] leading-[1.45] text-[var(--app-text)] outline-none placeholder:text-[var(--app-muted)]"
                   placeholder={running ? "添加引导，回车暂存" : emptyState ? "向 OpenCode 询问任何事。输入 @ 提及文件，输入 / 使用命令" : "输入要交给 OpenCode 的任务"}
                 />
-                <div className="mt-3 flex items-center justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-1">
+                <div className="mt-3 flex flex-col gap-3 border-t border-[var(--app-divider)] pt-2.5 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] disabled:opacity-50"
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] disabled:opacity-50"
                     title="添加附件和插件"
                     disabled={submitting}
                     onClick={() => setOpenMenu((value) => (value === "add" ? null : "add"))}
@@ -2313,7 +2329,7 @@ export function ThreadWorkspace({
                   ) : null}
                   <button
                     className={cn(
-                      "flex h-7 max-w-[150px] items-center gap-1 rounded-full px-2.5 text-xs font-medium hover:opacity-85",
+                      "flex h-8 max-w-[220px] items-center gap-1.5 rounded-full px-2.5 text-xs font-medium hover:opacity-85",
                       selectedPermission?.tone === "danger"
                         ? "text-[var(--app-danger)]"
                         : selectedPermission?.tone === "warning"
@@ -2328,13 +2344,13 @@ export function ThreadWorkspace({
                     <ChevronDownIcon className="h-4 w-4" />
                   </button>
                   </div>
-                  <div className="flex min-w-0 items-center gap-1">
+                  <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
                   {visibleError ? (
                     <span className="max-w-[260px] truncate text-[13px] text-[var(--app-danger)]">{visibleError}</span>
                   ) : null}
                   {showContextUsage ? <ContextUsageBadge usage={contextUsage} /> : null}
                   <button
-                    className="flex h-7 max-w-[260px] items-center gap-1 rounded-full px-2.5 text-xs font-medium text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+                    className="flex h-8 max-w-[280px] items-center gap-1 rounded-full px-2.5 text-xs font-medium text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
                     title={selectedModel ? `${selectedModel.providerName}/${selectedModel.name}` : "选择模型"}
                     onClick={() => setOpenMenu((value) => (value === "model" ? null : "model"))}
                   >
@@ -2356,7 +2372,7 @@ export function ThreadWorkspace({
                   ) : null}
                   {!running ? (
                     <button
-                      className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--app-text)] text-[var(--app-bg)] shadow-sm hover:opacity-90 disabled:opacity-50"
+                      className="flex h-11 w-11 items-center justify-center rounded-2xl bg-[var(--app-text)] text-[var(--app-bg)] shadow-sm hover:opacity-90 disabled:opacity-50"
                       title={submitting ? "正在发送给 OpenCode" : "发送"}
                       onClick={() => void submitDraft()}
                       disabled={submitting || (!draft.trim() && !attachments.length)}
@@ -2372,34 +2388,42 @@ export function ThreadWorkspace({
                 </div>
               </div>
               {emptyState ? (
-                <div ref={workspaceMenuAnchorRef} className="relative mt-2 flex justify-start">
-                  <button
-                    type="button"
-                    className="flex h-9 max-w-[300px] items-center gap-2 rounded-md border border-transparent px-2 text-sm font-medium text-[var(--app-muted)] hover:border-[var(--app-border)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] disabled:opacity-50"
-                    title={workspace?.path ?? "选择项目"}
-                    disabled={workspaceSelecting}
-                    onClick={() => setWorkspaceMenuOpen((value) => !value)}
-                  >
-                    {workspaceSelecting ? (
-                      <Loader2Icon className="h-4 w-4 shrink-0 animate-spin" />
-                    ) : (
-                      <FolderOpenIcon className="h-4 w-4 shrink-0" />
-                    )}
-                    <span className="min-w-0 truncate">{workspaceLabel}</span>
-                    <ChevronDownIcon className="h-4 w-4 shrink-0" />
-                  </button>
-                  {workspaceMenuOpen ? (
-                    <ComposerWorkspaceMenu
-                      workspace={workspace}
-                      workspaces={workspaceOptions}
-                      onPickWorkspace={onPickWorkspace}
-                      onWorkspaceSelect={onWorkspaceSelect}
-                      onClose={() => setWorkspaceMenuOpen(false)}
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <div ref={workspaceMenuAnchorRef} className="relative flex min-w-0 items-center">
+                    <button
+                      type="button"
+                      className="flex h-9 max-w-[300px] items-center gap-2 rounded-md border border-transparent px-2 text-sm font-medium text-[var(--app-muted)] hover:border-[var(--app-border)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] disabled:opacity-50"
+                      title={workspace?.path ?? "选择项目"}
+                      disabled={workspaceSelecting}
+                      onClick={() => setWorkspaceMenuOpen((value) => !value)}
+                    >
+                      {workspaceSelecting ? (
+                        <Loader2Icon className="h-4 w-4 shrink-0 animate-spin" />
+                      ) : (
+                        <FolderOpenIcon className="h-4 w-4 shrink-0" />
+                      )}
+                      <span className="min-w-0 truncate">{workspaceLabel}</span>
+                      <ChevronDownIcon className="h-4 w-4 shrink-0" />
+                    </button>
+                    {workspaceMenuOpen ? (
+                      <ComposerWorkspaceMenu
+                        workspace={workspace}
+                        workspaces={workspaceOptions}
+                        onPickWorkspace={onPickWorkspace}
+                        onWorkspaceSelect={onWorkspaceSelect}
+                        onClose={() => setWorkspaceMenuOpen(false)}
+                      />
+                    ) : null}
+                  </div>
+                  {gitAutoDetect ? (
+                    <GitBranchChip
+                      status={gitStatus}
+                      loading={gitLoading}
+                      workspaceSelected={Boolean(workspace?.path)}
                     />
                   ) : null}
                 </div>
-              ) : null}
-              {gitAutoDetect ? (
+              ) : gitAutoDetect ? (
                 <GitBranchStatus
                   status={gitStatus}
                   loading={gitLoading}
@@ -3888,7 +3912,7 @@ function PendingGuideBar({
   return (
     <div
       className={cn(
-        "mb-2 flex min-h-10 items-center justify-between gap-2 rounded-[18px] border px-2.5 py-1.5 text-xs font-medium",
+        "mb-4 flex min-h-11 items-center justify-between gap-3 rounded-2xl border px-3 py-2 text-xs font-medium",
         failed
           ? "border-[var(--app-danger)] bg-[var(--app-danger-soft)] text-[var(--app-danger)]"
           : "border-[var(--app-border)] bg-[var(--app-hover)] text-[var(--app-muted)]",
@@ -4006,7 +4030,7 @@ function GuideMenuButton({
 
 function GuideChip({ label }: { label: string }) {
   return (
-    <span className="rounded-full border border-[var(--app-border)] bg-[var(--app-panel-2)] px-3 py-1 text-xs font-medium text-[var(--app-muted)]">
+    <span className="rounded-full border border-[var(--app-border)] bg-[var(--app-panel-2)] px-3.5 py-1.5 text-xs font-medium text-[var(--app-muted)] shadow-sm shadow-black/5">
       {label}
     </span>
   )
@@ -4133,7 +4157,7 @@ function GitBranchChip({
     <div
       className={cn(
         "inline-flex min-w-0 items-center gap-1.5 rounded-md border font-medium",
-        compact ? "h-6 max-w-[18rem] px-1.5 text-[11px]" : "h-7 max-w-full px-2 text-[12px]",
+        compact ? "h-6 max-w-[18rem] px-1.5 text-[11px]" : "h-9 max-w-full px-2.5 text-[12px]",
         hasBranch
           ? "border-[var(--app-border)] bg-[var(--app-panel-2)] text-[var(--app-muted)]"
           : "border-transparent text-[var(--app-subtle)]",
@@ -5901,6 +5925,7 @@ function PartRow({
 function FloatingProgressWindow({
   items,
   todos,
+  diffs,
   running,
   interrupted,
   pinned,
@@ -5909,6 +5934,7 @@ function FloatingProgressWindow({
 }: {
   items: ProgressItem[]
   todos: TodoStep[]
+  diffs: SessionDiffFile[]
   running: boolean
   interrupted: boolean
   pinned: boolean
@@ -5972,24 +5998,32 @@ function FloatingProgressWindow({
     }
   }, [floatingHovered, pinned, suspended])
 
-  const commandCount = items.filter((item) => item.commandLike).length
   const completedTodoCount = todos.filter((todo) => todo.status === "completed").length
+  const fallbackProgressSteps = useMemo(
+    () => fallbackProgressStepsFromActivities(items, running, interrupted),
+    [items, running, interrupted],
+  )
+  const generatedResults = useMemo(() => generatedResultsFromDiffs(diffs), [diffs])
+  const sourceRows = useMemo(() => sourceSummariesFromActivities(items), [items])
   const earliestStart = items.reduce<number | null>((earliest, activity) => {
     const ts = activity.createdAt
     if (!ts) return earliest
     return earliest === null || ts < earliest ? ts : earliest
   }, null)
   const elapsed = running ? formatDuration(now - (earliestStart ?? now)) : null
-  const failedCount = items.filter((activity) => activity.status === "failed").length
+  const failedItems = items.filter((activity) => activity.status === "failed")
+  const failedCount = failedItems.length
   const waitingCount = items.filter((activity) => activity.status === "waiting" || activity.status === "pending").length
-  const displayItems = (failedOnly ? items.filter((activity) => activity.status === "failed") : items).slice().reverse()
+  const progressCount = todos.length || fallbackProgressSteps.length
   const title = running ? "正在处理" : interrupted ? "已中断" : failedCount ? "处理完成，有异常" : "处理完成"
   const detail = [
     elapsed,
-    todos.length ? `${completedTodoCount}/${todos.length} 个步骤` : "",
+    progressCount ? `${todos.length ? `${completedTodoCount}/${todos.length}` : progressCount} 项进度` : "",
+    generatedResults.totalCount ? `${generatedResults.totalCount} 个结果` : "",
+    sourceRows.length ? `${sourceRows.length} 个来源` : "",
     failedCount ? `${failedCount} 个异常` : "",
-    commandCount ? `已运行 ${commandCount} 条命令` : items.length ? `${items.length} 步` : running ? "正在等待执行记录" : "暂无执行记录",
     waitingCount ? `${waitingCount} 个等待` : "",
+    !progressCount && !generatedResults.totalCount && !sourceRows.length && running ? "正在整理进度" : "",
   ].filter(Boolean).join(" · ")
   const showStrip = !pinned && (cursorZone !== "outside" || panelLatched || floatingHovered)
   const showPanel = pinned || cursorZone === "panel" || panelLatched || floatingHovered
@@ -6080,35 +6114,52 @@ function FloatingProgressWindow({
               </div>
             ) : null}
 
-            {!failedOnly && todos.length ? (
-              <div className="shrink-0">
-                <div className="flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-normal text-[var(--app-subtle)]">
-                  <span>任务步骤</span>
-                  <span className="tabular-nums">{completedTodoCount}/{todos.length}</span>
-                </div>
-                <div className="mt-2 max-h-[104px] space-y-1.5 overflow-y-auto pr-1">
-                  {todos.map((todo) => (
-                    <FloatingTodoStepRow key={todo.id} todo={todo} running={running} interrupted={interrupted} />
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
-            <div
-              className={cn(
-                "min-h-0 flex-1 space-y-2 overflow-y-auto pr-1",
-                !failedOnly && todos.length && "mt-3 border-t border-[var(--app-divider)] pt-3",
-              )}
-            >
-              {displayItems.length ? (
-                displayItems.map((activity, index) => (
-                  <FloatingProgressRow key={activity.id} activity={activity} index={index} running={running} />
-                ))
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+              {failedOnly ? (
+                failedItems.length ? (
+                  failedItems.slice().reverse().map((activity, index) => (
+                    <FloatingProgressRow key={activity.id} activity={activity} index={index} running={running} />
+                  ))
+                ) : (
+                  <FloatingSummaryPlaceholder text="暂无异常记录" />
+                )
               ) : (
-                <div className="flex items-center gap-2 text-xs font-medium text-[var(--app-muted)]">
-                  <Loader2Icon className={cn("h-3.5 w-3.5", running && "animate-spin")} />
-                  <span>{failedOnly ? "暂无异常记录" : running ? "等待第一条执行记录" : "暂无执行记录"}</span>
-                </div>
+                <>
+                  <FloatingSummarySection title="进度" meta={todos.length ? `${completedTodoCount}/${todos.length}` : undefined}>
+                    {todos.length ? (
+                      todos.map((todo) => (
+                        <FloatingTodoStepRow key={todo.id} todo={todo} running={running} interrupted={interrupted} />
+                      ))
+                    ) : fallbackProgressSteps.length ? (
+                      fallbackProgressSteps.map((step) => (
+                        <FloatingSummaryStepRow key={step.id} step={step} />
+                      ))
+                    ) : (
+                      <FloatingSummaryPlaceholder text={running ? "等待进度更新" : "暂无进度总结"} spinning={running} />
+                    )}
+                  </FloatingSummarySection>
+
+                  {generatedResults.rows.length ? (
+                    <FloatingSummarySection title="生成结果">
+                      {generatedResults.rows.map((result) => (
+                        <FloatingGeneratedResultRow key={result.id} result={result} />
+                      ))}
+                      {generatedResults.hiddenCount ? (
+                        <div className="px-1 text-[11px] font-medium text-[var(--app-subtle)]">
+                          再显示 {generatedResults.hiddenCount} 个
+                        </div>
+                      ) : null}
+                    </FloatingSummarySection>
+                  ) : null}
+
+                  {sourceRows.length ? (
+                    <FloatingSummarySection title="来源">
+                      {sourceRows.map((source) => (
+                        <FloatingSourceRow key={source.id} source={source} />
+                      ))}
+                    </FloatingSummarySection>
+                  ) : null}
+                </>
               )}
             </div>
           </div>
@@ -6171,6 +6222,105 @@ function FloatingTodoStepRow({ todo, running, interrupted }: { todo: TodoStep; r
           {todo.priority ? <span className="truncate">优先级：{todo.priority}</span> : null}
         </div>
       </div>
+    </div>
+  )
+}
+
+const summaryStatusText: Record<ProgressSummaryStatus, string> = {
+  completed: "已完成",
+  running: "进行中",
+  pending: "等待中",
+  failed: "异常",
+  interrupted: "已中断",
+  warning: "需注意",
+}
+
+function summaryStatusIcon(status: ProgressSummaryStatus): IconComponent {
+  if (status === "running") return Loader2Icon
+  if (status === "failed" || status === "interrupted") return XCircleIcon
+  if (status === "pending") return CircleIcon
+  return CheckCircle2Icon
+}
+
+function FloatingSummarySection({
+  title,
+  meta,
+  children,
+}: {
+  title: string
+  meta?: string
+  children: ReactNode
+}) {
+  return (
+    <section className="space-y-1.5">
+      <div className="flex items-center justify-between gap-3 px-1 text-[11px] font-semibold text-[var(--app-subtle)]">
+        <span>{title}</span>
+        {meta ? <span className="shrink-0 tabular-nums">{meta}</span> : null}
+      </div>
+      <div className="space-y-1.5">{children}</div>
+    </section>
+  )
+}
+
+function FloatingSummaryStepRow({ step }: { step: ProgressSummaryStep }) {
+  const Icon = summaryStatusIcon(step.status)
+  return (
+    <div className="flex min-w-0 items-start gap-2 rounded-md px-1 py-1 text-xs font-medium text-[var(--app-muted)]">
+      <Icon
+        className={cn(
+          "mt-0.5 h-3.5 w-3.5 shrink-0",
+          step.status === "running" && "animate-spin text-[var(--app-text)]",
+          step.status === "completed" && "text-[var(--app-text)]",
+          step.status === "failed" && "text-[var(--app-danger)]",
+          step.status === "interrupted" && "text-[var(--app-subtle)]",
+        )}
+      />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[var(--app-text)]">{step.label}</div>
+        <div className="mt-0.5 flex min-w-0 items-center gap-2 text-[11px] text-[var(--app-subtle)]">
+          <span className="shrink-0">{summaryStatusText[step.status]}</span>
+          {step.detail ? <span className="truncate">{step.detail}</span> : null}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function FloatingGeneratedResultRow({ result }: { result: ProgressGeneratedResult }) {
+  return (
+    <div className="flex min-w-0 items-start gap-2 rounded-md px-1 py-1 text-xs font-medium text-[var(--app-muted)]">
+      <FileTextIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--app-text)]" />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[var(--app-text)]" title={result.file}>{result.label}</div>
+        <div className="mt-0.5 flex min-w-0 items-center gap-2 text-[11px] text-[var(--app-subtle)]">
+          <span className="shrink-0">{diffStatusLabel(result.status)}</span>
+          {result.additions ? <span className="shrink-0 text-[var(--app-success)]">+{result.additions}</span> : null}
+          {result.deletions ? <span className="shrink-0 text-[var(--app-danger)]">-{result.deletions}</span> : null}
+          {result.detail ? <span className="truncate">{result.detail}</span> : null}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function FloatingSourceRow({ source }: { source: ProgressSourceSummary }) {
+  const Icon = source.id === "workspace" ? FolderOpenIcon : GlobeIcon
+  return (
+    <div className="flex min-w-0 items-start gap-2 rounded-md px-1 py-1 text-xs font-medium text-[var(--app-muted)]">
+      <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--app-text)]" />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[var(--app-text)]">{source.label}</div>
+        {source.detail ? <div className="mt-0.5 truncate text-[11px] text-[var(--app-subtle)]">{source.detail}</div> : null}
+      </div>
+    </div>
+  )
+}
+
+function FloatingSummaryPlaceholder({ text, spinning }: { text: string; spinning?: boolean }) {
+  return (
+    <div className="flex items-center gap-2 px-1 py-1 text-xs font-medium text-[var(--app-muted)]">
+      <Loader2Icon className={cn("h-3.5 w-3.5", spinning && "animate-spin")} />
+      <span>{text}</span>
     </div>
   )
 }

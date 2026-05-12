@@ -2,7 +2,7 @@
 
 ## 1. 背景与目标
 
-当前仓库已有 `packages/app`、`packages/desktop`、`packages/opencode` 等模块。现有 GUI 主要依赖 Solid 前端和 Electron 桌面壳，`packages/desktop/README.md` 中提到 Tauri v2，但实际包结构仍是 Electron/Electron Vite。为了避免和现有实现互相牵制，新 GUI 建议独立建设为一个新的桌面应用包。
+当前仓库历史上曾有旧 Solid 前端和 Electron 桌面壳。为了避免和旧实现互相牵制，新 GUI 独立建设为 `packages/gui`。
 
 本计划目标是生成一套可长期维护、可打包为 Windows exe 的新 GUI 工具：
 
@@ -33,8 +33,8 @@
 
 | 模块 | 现状 | 对新 GUI 的影响 |
 | --- | --- | --- |
-| `packages/app` | Solid + Vite 前端，依赖 `@opencode-ai/sdk`、`@opencode-ai/ui` | 不直接复用 UI 组件，但可参考数据流、事件流、会话布局和 SDK 使用方式 |
-| `packages/desktop` | package 脚本为 Electron，包含主进程、preload、renderer、electron-builder 配置 | 可参考本地 server 启动、窗口、存储、系统对话框、打包思路；不建议在原包内硬改 |
+| 旧 Solid 前端 | Solid + Vite 前端，依赖 `@opencode-ai/sdk`、`@opencode-ai/ui` | 已移除，不再作为复用来源 |
+| 旧 Electron 桌面壳 | package 脚本为 Electron，包含主进程、preload、renderer、electron-builder 配置 | 已移除，不再作为复用来源 |
 | `packages/opencode` | opencode 核心、server、HTTP API、SSE、PTY WebSocket、TUI | 新 GUI 应通过 HTTP/SSE/WebSocket 调用它，而不是复制业务逻辑 |
 | `packages/sdk/js` | 由 OpenAPI 生成的 JS SDK，包含 v2 client | React 前端可直接复用 SDK，减少接口手写成本 |
 
@@ -94,7 +94,7 @@ packages/gui/
 - Tauri 与 React/Vite/Rust 的组合天然适合打包 exe。
 - Rust 后端可以直接负责进程管理、SQLite、文件监听、系统通知、路径选择、安全 token。
 - 前端保持纯 React 应用，UI 可以完全按你的审美重做。
-- 与现有 `packages/desktop` 隔离，降低迁移风险。
+- 与旧桌面壳隔离，降低迁移风险。
 
 ### 3.2 前端技术栈
 
@@ -480,7 +480,7 @@ Tauri Windows 构建输出：
 - 开发预览：`target/release/opencode-gui.exe`。
 - 安装包：MSI 或 NSIS，优先 NSIS，方便安装目录选择。
 - 依赖：Windows WebView2 Runtime。
-- 图标：可先复用 `packages/desktop/icons/prod/icon.ico`，后续替换新品牌图标。
+- 图标：使用 GUI 自有 Tauri 图标，后续替换新品牌图标。
 
 ### 10.3 opencode sidecar
 

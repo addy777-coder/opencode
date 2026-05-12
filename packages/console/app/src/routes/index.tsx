@@ -54,22 +54,6 @@ export default function Home() {
 
         <div data-component="content">
           <section data-component="hero">
-            <div data-component="desktop-app-banner">
-              <span data-slot="badge">{i18n.t("home.banner.badge")}</span>
-              <div data-slot="content">
-                <span data-slot="text">
-                  {i18n.t("home.banner.text")}
-                  <span data-slot="platforms"> {i18n.t("home.banner.platforms")}</span>.
-                </span>
-                <a href={language.route("/download")} data-slot="link">
-                  {i18n.t("home.banner.downloadNow")}
-                </a>
-                <a href={language.route("/download")} data-slot="link-mobile">
-                  {i18n.t("home.banner.downloadBetaNow")}
-                </a>
-              </div>
-            </div>
-
             <div data-slot="hero-copy">
               {/*<a data-slot="releases"*/}
               {/*   href={release()?.url ?? `${config.github.repoUrl}/releases`}*/}
@@ -691,13 +675,6 @@ export default function Home() {
                 <Faq question={i18n.t("home.faq.q4")}>
                   {i18n.t("home.faq.a4.p1")}{" "}
                   <a href={language.route("/docs/providers/#directory")}>{i18n.t("common.learnMore")}</a>.
-                </Faq>
-              </li>
-              <li>
-                <Faq question={i18n.t("home.faq.q5")}>
-                  {i18n.t("home.faq.a5.beforeDesktop")}{" "}
-                  <a href={language.route("/download")}>{i18n.t("home.faq.a5.desktop")}</a> {i18n.t("home.faq.a5.and")}{" "}
-                  <a href={language.route("/docs/web")}>{i18n.t("home.faq.a5.web")}</a>!
                 </Faq>
               </li>
               <li>

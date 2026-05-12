@@ -1,0 +1,2 @@
+$ vite --host 127.0.0.1 --port 1420
+error: script "dev" exited with code 255
