@@ -506,7 +506,7 @@ describe("tool.edit", () => {
           )
 
           expect(result.metadata.filediff).toBeDefined()
-          expect(result.metadata.filediff.file).toBe(filepath)
+          expect(result.metadata.filediff.file).toBe("file.txt")
           expect(result.metadata.filediff.additions).toBeGreaterThan(0)
         },
       })
