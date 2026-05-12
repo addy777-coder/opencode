@@ -1,7 +1,7 @@
 use crate::error::command_error;
 use crate::events;
 use crate::opencode::{self, ServerMode, ServerStatus};
-use crate::state::AppState;
+use crate::state::{AppState, ManagedServerChild};
 use crate::storage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -456,6 +456,70 @@ pub enum IntegratedShell {
     Gitbash,
 }
 
+enum ManagedChildAction {
+    Keep,
+    DropExited,
+    Stop,
+}
+
+fn managed_child_action(
+    managed: &mut ManagedServerChild,
+    requested_base_url: Option<&str>,
+) -> ManagedChildAction {
+    match managed.child.try_wait() {
+        Ok(Some(_)) => return ManagedChildAction::DropExited,
+        Ok(None) => {}
+        Err(_) => return ManagedChildAction::Stop,
+    }
+
+    if let Some(base_url) = requested_base_url {
+        if managed.base_url != base_url {
+            return ManagedChildAction::Stop;
+        }
+    }
+
+    ManagedChildAction::Keep
+}
+
+async fn reconcile_managed_child(state: &AppState, requested_base_url: &str) {
+    let mut child_to_stop = None;
+    {
+        let mut child_guard = state.opencode_child.lock().await;
+        let action = child_guard
+            .as_mut()
+            .map(|managed| managed_child_action(managed, Some(requested_base_url)))
+            .unwrap_or(ManagedChildAction::Keep);
+
+        match action {
+            ManagedChildAction::Keep => {}
+            ManagedChildAction::DropExited => {
+                let _ = child_guard.take();
+            }
+            ManagedChildAction::Stop => {
+                child_to_stop = child_guard.take();
+            }
+        }
+    }
+
+    if let Some(managed) = child_to_stop {
+        opencode::stop_local_server(managed.child).await;
+    }
+}
+
+async fn stop_managed_child(state: &AppState) {
+    if let Some(mut managed) = state.opencode_child.lock().await.take() {
+        if !matches!(managed.child.try_wait(), Ok(Some(_))) {
+            opencode::stop_local_server(managed.child).await;
+        }
+    }
+}
+
+pub async fn shutdown_managed_server(state: &AppState) {
+    events::stop_global_bridge(state.event_bridge.clone()).await;
+    stop_managed_child(state).await;
+    *state.server.write().await = ServerStatus::unconfigured();
+}
+
 #[tauri::command]
 pub async fn app_init(state: State<'_, AppState>) -> Result<AppInitResult, String> {
     let server = state.server.read().await.clone();
@@ -474,37 +538,57 @@ pub async fn server_start(
 ) -> Result<ServerStatus, String> {
     let base_url = input
         .base_url
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "http://127.0.0.1:4096".to_string());
     let mode = input.mode.unwrap_or(ServerMode::Local);
+
+    if matches!(mode, ServerMode::Local) {
+        reconcile_managed_child(&state, &base_url).await;
+    } else {
+        stop_managed_child(&state).await;
+    }
+
     let mut healthy = opencode::check_health(&base_url).await.unwrap_or(false);
 
     if !healthy && matches!(mode, ServerMode::Local) {
         let mut child_guard = state.opencode_child.lock().await;
         if child_guard
             .as_mut()
-            .and_then(|child| child.try_wait().ok().flatten())
-            .is_some()
+            .map(|managed| {
+                matches!(
+                    managed_child_action(managed, Some(&base_url)),
+                    ManagedChildAction::DropExited | ManagedChildAction::Stop
+                )
+            })
+            .unwrap_or(false)
         {
             *child_guard = None;
         }
         if child_guard.is_none() {
-            let child = opencode::start_local_server(&base_url).await?;
-            *child_guard = Some(child);
+            let child = opencode::start_local_server(&app, &base_url).await?;
+            *child_guard = Some(ManagedServerChild {
+                base_url: base_url.clone(),
+                child,
+            });
         }
         drop(child_guard);
         healthy = opencode::wait_until_healthy(&base_url, 24).await;
     }
 
+    let message = if healthy {
+        "OpenCode server 状态正常".to_string()
+    } else if matches!(mode, ServerMode::Local) {
+        "暂时无法连接 OpenCode server；本地启动可能仍在初始化，或端口被其他程序占用。".to_string()
+    } else {
+        "暂时无法连接 OpenCode server；请确认远程服务地址可访问。".to_string()
+    };
+
     let status = ServerStatus {
         healthy,
         mode,
         base_url: Some(base_url.clone()),
-        message: if healthy {
-            "OpenCode server 状态正常".to_string()
-        } else {
-            "暂时无法连接 OpenCode server；本地启动可能仍在初始化，或端口被其他程序占用。"
-                .to_string()
-        },
+        message,
     };
 
     *state.server.write().await = status.clone();
@@ -518,11 +602,7 @@ pub async fn server_start(
 
 #[tauri::command]
 pub async fn server_stop(state: State<'_, AppState>) -> Result<(), String> {
-    events::stop_global_bridge(state.event_bridge.clone()).await;
-    if let Some(child) = state.opencode_child.lock().await.take() {
-        opencode::stop_local_server(child).await;
-    }
-    *state.server.write().await = ServerStatus::unconfigured();
+    shutdown_managed_server(&state).await;
     Ok(())
 }
 

@@ -16,7 +16,7 @@ fn main() {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -90,6 +90,13 @@ fn main() {
             commands::git_status,
             commands::workspace_file_diffs
         ])
-        .run(tauri::generate_context!())
-        .expect("运行 OpenCode GUI 时发生错误")
+        .build(tauri::generate_context!())
+        .expect("初始化 OpenCode GUI 时发生错误");
+
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { .. } = event {
+            let state = app_handle.state::<AppState>();
+            tauri::async_runtime::block_on(commands::shutdown_managed_server(&state));
+        }
+    });
 }

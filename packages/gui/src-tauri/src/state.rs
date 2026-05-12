@@ -17,11 +17,17 @@ pub struct AppInfo {
 }
 
 #[derive(Debug)]
+pub struct ManagedServerChild {
+    pub base_url: String,
+    pub child: Child,
+}
+
+#[derive(Debug)]
 pub struct AppState {
     pub db: SqlitePool,
     pub info: AppInfo,
     pub server: Arc<RwLock<ServerStatus>>,
-    pub opencode_child: Arc<Mutex<Option<Child>>>,
+    pub opencode_child: Arc<Mutex<Option<ManagedServerChild>>>,
     pub event_bridge: SharedEventBridgeState,
 }
 

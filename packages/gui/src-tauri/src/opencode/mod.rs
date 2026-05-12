@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::{path::BaseDirectory, AppHandle, Manager};
 use tokio::process::{Child, Command};
 use tokio::task::JoinSet;
 use tokio::time::{sleep, Duration};
@@ -16,6 +17,11 @@ const CODEX_SKILLS_REPO: &str = "openai/skills";
 const CODEX_SKILLS_REF: &str = "main";
 const CODEX_CURATED_SKILLS_PATH: &str = "skills/.curated";
 const CODEX_RECOMMENDATION_CACHE_TTL_SECONDS: u64 = 10 * 60;
+const BUNDLED_SERVER_BINARY_NAME: &str = if cfg!(windows) {
+    "opencode-server.exe"
+} else {
+    "opencode-server"
+};
 
 type CodexRecommendationCache = Option<(SystemTime, Vec<SkillRecommendationInfo>)>;
 static CODEX_RECOMMENDATION_CACHE: OnceLock<Mutex<CodexRecommendationCache>> = OnceLock::new();
@@ -392,36 +398,96 @@ pub async fn check_health(base_url: &str) -> Result<bool, reqwest::Error> {
     Ok(response.status().is_success())
 }
 
-pub async fn start_local_server(base_url: &str) -> Result<Child, String> {
+pub async fn start_local_server(app: &AppHandle, base_url: &str) -> Result<Child, String> {
+    let (hostname, port) = local_server_bind(base_url)?;
+    let args = local_server_args(&hostname, &port);
+
+    if let Some(sidecar) = bundled_server_binary(app) {
+        let mut command = Command::new(&sidecar);
+        command.args(&args);
+        return spawn_local_server(command, "内置 OpenCode backend");
+    }
+
+    if !cfg!(debug_assertions) {
+        return Err("安装包缺少内置 OpenCode backend，请重新安装完整发布包。".to_string());
+    }
+
+    let command = dev_source_server_command(&args)?;
+    spawn_local_server(command, "开发源码 OpenCode server")
+}
+
+fn local_server_bind(base_url: &str) -> Result<(String, String), String> {
     let parsed = reqwest::Url::parse(base_url)
         .map_err(|error| format!("OpenCode server 地址无效：{error}"))?;
     let hostname = parsed.host_str().unwrap_or("127.0.0.1").to_string();
     let port = parsed.port_or_known_default().unwrap_or(4096).to_string();
+    Ok((hostname, port))
+}
+
+fn local_server_args(hostname: &str, port: &str) -> Vec<String> {
+    vec![
+        "serve".to_string(),
+        format!("--hostname={hostname}"),
+        format!("--port={port}"),
+    ]
+}
+
+fn dev_source_server_command(server_args: &[String]) -> Result<Command, String> {
     let repo_root = repo_root()?;
     let npx = if cfg!(windows) { "npx.cmd" } else { "npx" };
-    let args = vec![
+    let mut args = vec![
         "--yes".to_string(),
         "bun@1.3.13".to_string(),
         "--cwd".to_string(),
         "packages/opencode".to_string(),
         "--conditions=browser".to_string(),
         "./src/index.ts".to_string(),
-        "serve".to_string(),
-        format!("--hostname={hostname}"),
-        format!("--port={port}"),
     ];
+    args.extend(server_args.iter().cloned());
 
-    let child = Command::new(npx)
-        .current_dir(&repo_root)
-        .args(args)
+    let mut command = Command::new(npx);
+    command.current_dir(repo_root).args(args);
+    Ok(command)
+}
+
+fn spawn_local_server(mut command: Command, launcher: &str) -> Result<Child, String> {
+    let child = command
         .env("OPENCODE_CLIENT", "desktop")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|error| format!("启动 OpenCode server 失败：{error}"))?;
+        .map_err(|error| format!("启动 {launcher} 失败：{error}"))?;
 
     Ok(child)
+}
+
+fn bundled_server_binary(app: &AppHandle) -> Option<PathBuf> {
+    bundled_server_candidates(app)
+        .into_iter()
+        .find(|path| is_usable_sidecar(path))
+}
+
+fn bundled_server_candidates(app: &AppHandle) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(path) = app
+        .path()
+        .resolve(BUNDLED_SERVER_BINARY_NAME, BaseDirectory::Resource)
+    {
+        candidates.push(path);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            candidates.push(parent.join(BUNDLED_SERVER_BINARY_NAME));
+        }
+    }
+    candidates
+}
+
+fn is_usable_sidecar(path: &Path) -> bool {
+    fs::metadata(path)
+        .map(|metadata| metadata.is_file() && metadata.len() > 0)
+        .unwrap_or(false)
 }
 
 pub async fn wait_until_healthy(base_url: &str, attempts: usize) -> bool {
@@ -3326,6 +3392,50 @@ mod tests {
             .expect("local opencode skill should uninstall");
 
         assert!(!skill_dir.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn local_server_bind_uses_requested_host_and_port() {
+        let (hostname, port) =
+            local_server_bind("http://127.0.0.1:5099").expect("server bind should parse");
+
+        assert_eq!(hostname, "127.0.0.1");
+        assert_eq!(port, "5099");
+        assert_eq!(
+            local_server_args(&hostname, &port),
+            vec![
+                "serve".to_string(),
+                "--hostname=127.0.0.1".to_string(),
+                "--port=5099".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn local_server_bind_defaults_known_http_port() {
+        let (hostname, port) =
+            local_server_bind("http://localhost").expect("server bind should parse");
+
+        assert_eq!(hostname, "localhost");
+        assert_eq!(port, "80");
+    }
+
+    #[test]
+    fn usable_sidecar_requires_nonempty_file() {
+        let root =
+            std::env::temp_dir().join(format!("opencode-gui-sidecar-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("test dir should be created");
+
+        let empty = root.join("empty.exe");
+        fs::write(&empty, []).expect("empty sidecar should be written");
+        assert!(!is_usable_sidecar(&empty));
+
+        let nonempty = root.join("nonempty.exe");
+        fs::write(&nonempty, [1]).expect("nonempty sidecar should be written");
+        assert!(is_usable_sidecar(&nonempty));
+
         let _ = fs::remove_dir_all(&root);
     }
 }

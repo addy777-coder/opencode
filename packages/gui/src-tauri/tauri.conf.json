@@ -29,6 +29,7 @@
   },
   "bundle": {
     "active": true,
+    "externalBin": ["binaries/opencode-server"],
     "targets": ["nsis"],
     "windows": {
       "nsis": {
