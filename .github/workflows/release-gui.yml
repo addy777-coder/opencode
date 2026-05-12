@@ -110,6 +110,38 @@ jobs:
           "prerelease=$($prerelease.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           "ios_export_method=$iosExportMethod" >> $env:GITHUB_OUTPUT
 
+      - name: Validate updater signing configuration
+        env:
+          TAURI_UPDATER_PUBKEY_SECRET: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+          TAURI_SIGNING_PRIVATE_KEY_SECRET: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD_SECRET: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          $missing = @()
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_UPDATER_PUBKEY_SECRET)) {
+            $missing += "TAURI_UPDATER_PUBKEY"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_SECRET)) {
+            $missing += "TAURI_SIGNING_PRIVATE_KEY"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD_SECRET)) {
+            $missing += "TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          }
+          if ($missing.Count -gt 0) {
+            throw "Missing updater signing secrets: $($missing -join ', '). Configure these before publishing GUI releases with in-app updates."
+          }
+
+          "TAURI_UPDATER_PUBKEY<<TAURI_UPDATER_PUBKEY_EOF" >> $env:GITHUB_ENV
+          $env:TAURI_UPDATER_PUBKEY_SECRET >> $env:GITHUB_ENV
+          "TAURI_UPDATER_PUBKEY_EOF" >> $env:GITHUB_ENV
+
+          "TAURI_SIGNING_PRIVATE_KEY<<TAURI_SIGNING_PRIVATE_KEY_EOF" >> $env:GITHUB_ENV
+          $env:TAURI_SIGNING_PRIVATE_KEY_SECRET >> $env:GITHUB_ENV
+          "TAURI_SIGNING_PRIVATE_KEY_EOF" >> $env:GITHUB_ENV
+
+          "TAURI_SIGNING_PRIVATE_KEY_PASSWORD<<TAURI_SIGNING_PASSWORD_EOF" >> $env:GITHUB_ENV
+          $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD_SECRET >> $env:GITHUB_ENV
+          "TAURI_SIGNING_PASSWORD_EOF" >> $env:GITHUB_ENV
+
       - name: Setup Node
         uses: actions/setup-node@v5
         with:
@@ -168,6 +200,41 @@ jobs:
       - name: Build Tauri Windows installer
         run: bun --cwd packages/gui tauri:build
 
+      - name: Generate updater feed
+        if: steps.meta.outputs.prerelease != 'true'
+        run: |
+          $tag = "${{ steps.meta.outputs.tag }}"
+          $version = "${{ steps.meta.outputs.version }}"
+          $repo = $env:GITHUB_REPOSITORY
+          $assetDir = "packages/gui/src-tauri/target/release/bundle/nsis"
+          $installer = Get-ChildItem -Path $assetDir -File -Filter "*.exe" -ErrorAction Stop |
+            Where-Object { $_.Name -notlike "*.sig" } |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if (-not $installer) {
+            throw "No NSIS installer found in $assetDir."
+          }
+
+          $signaturePath = "$($installer.FullName).sig"
+          if (-not (Test-Path $signaturePath)) {
+            throw "Updater signature not found at $signaturePath."
+          }
+
+          $downloadUrl = "https://github.com/$repo/releases/download/$tag/$([System.Uri]::EscapeDataString($installer.Name))"
+          $latest = [ordered]@{
+            version = $version
+            notes = "OpenCode GUI release."
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)
+            platforms = [ordered]@{
+              "windows-x86_64-nsis" = [ordered]@{
+                signature = (Get-Content -Raw $signaturePath).Trim()
+                url = $downloadUrl
+              }
+            }
+          }
+
+          $latest | ConvertTo-Json -Depth 10 | Set-Content -NoNewline "$assetDir/latest.json"
+
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v6
         with:
@@ -177,6 +244,7 @@ jobs:
             packages/gui/src-tauri/target/release/bundle/nsis/*.exe
             packages/gui/src-tauri/target/release/bundle/nsis/*.zip
             packages/gui/src-tauri/target/release/bundle/nsis/*.sig
+            packages/gui/src-tauri/target/release/bundle/nsis/latest.json
 
       - name: Upload assets to GitHub Release
         if: steps.meta.outputs.upload_release == 'true'
@@ -217,7 +285,7 @@ jobs:
 
           $assetDir = "packages/gui/src-tauri/target/release/bundle/nsis"
           $assets = Get-ChildItem -Path $assetDir -File -ErrorAction Stop |
-            Where-Object { $_.Extension -in ".exe", ".zip", ".sig" }
+            Where-Object { $_.Extension -in ".exe", ".zip", ".sig", ".json" }
 
           if (-not $assets) {
             throw "No release assets found in $assetDir."

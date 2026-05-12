@@ -11,6 +11,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
+#[cfg(desktop)]
+use tauri_plugin_updater::UpdaterExt;
+
+const GUI_UPDATE_ENDPOINT: &str =
+    "https://github.com/addy777-coder/opencode/releases/latest/download/latest.json";
+const GUI_UPDATE_RELEASE_URL: &str = "https://github.com/addy777-coder/opencode/releases";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +24,17 @@ pub struct AppInitResult {
     pub version: String,
     pub database_ready: bool,
     pub server: ServerStatus,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiUpdateCheckResult {
+    pub available: bool,
+    pub current_version: String,
+    pub version: Option<String>,
+    pub body: Option<String>,
+    pub date: Option<i64>,
+    pub release_url: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -528,6 +545,90 @@ pub async fn app_init(state: State<'_, AppState>) -> Result<AppInitResult, Strin
         database_ready: state.info.database_ready,
         server,
     })
+}
+
+#[cfg(desktop)]
+fn gui_update_pubkey() -> Result<&'static str, String> {
+    option_env!("TAURI_UPDATER_PUBKEY")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            "未配置 GUI 自动更新公钥；请在发布构建中设置 TAURI_UPDATER_PUBKEY。".to_string()
+        })
+}
+
+#[cfg(desktop)]
+fn gui_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
+    let endpoint = reqwest::Url::parse(GUI_UPDATE_ENDPOINT).map_err(command_error)?;
+    app.updater_builder()
+        .endpoints(vec![endpoint])
+        .map_err(command_error)?
+        .pubkey(gui_update_pubkey()?)
+        .build()
+        .map_err(command_error)
+}
+
+#[tauri::command]
+#[cfg(desktop)]
+pub async fn gui_update_check(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<GuiUpdateCheckResult, String> {
+    let current_version = state.info.version.clone();
+    let update = gui_updater(&app)?.check().await.map_err(command_error)?;
+    Ok(match update {
+        Some(update) => GuiUpdateCheckResult {
+            available: true,
+            current_version,
+            version: Some(update.version),
+            body: update.body,
+            date: update.date.map(|date| date.unix_timestamp()),
+            release_url: GUI_UPDATE_RELEASE_URL.to_string(),
+        },
+        None => GuiUpdateCheckResult {
+            available: false,
+            current_version,
+            version: None,
+            body: None,
+            date: None,
+            release_url: GUI_UPDATE_RELEASE_URL.to_string(),
+        },
+    })
+}
+
+#[tauri::command]
+#[cfg(desktop)]
+pub async fn gui_update_install(app: AppHandle) -> Result<(), String> {
+    let update = gui_updater(&app)?
+        .check()
+        .await
+        .map_err(command_error)?
+        .ok_or_else(|| "当前已经是最新版本。".to_string())?;
+
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(command_error)?;
+    app.restart();
+}
+
+#[tauri::command]
+#[cfg(mobile)]
+pub async fn gui_update_check(state: State<'_, AppState>) -> Result<GuiUpdateCheckResult, String> {
+    Ok(GuiUpdateCheckResult {
+        available: false,
+        current_version: state.info.version.clone(),
+        version: None,
+        body: None,
+        date: None,
+        release_url: GUI_UPDATE_RELEASE_URL.to_string(),
+    })
+}
+
+#[tauri::command]
+#[cfg(mobile)]
+pub async fn gui_update_install() -> Result<(), String> {
+    Err("移动端暂不支持 GUI 自动更新。".to_string())
 }
 
 #[tauri::command]

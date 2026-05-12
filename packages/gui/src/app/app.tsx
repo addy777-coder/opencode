@@ -18,6 +18,7 @@ import {
   ChevronRight,
   Clock3,
   Copy,
+  Download,
   Edit3,
   ExternalLink,
   FileText,
@@ -103,6 +104,8 @@ import {
   executionOptions,
   fileSearch,
   gitStatus,
+  guiUpdateCheck,
+  guiUpdateInstall,
   mcpAdd,
   openPath,
   openUrl,
@@ -150,6 +153,7 @@ import {
   type PermissionInfo,
   type QuestionInfo,
   type GitStatus,
+  type GuiUpdateCheckResult,
   type OpenCodeSymbol,
   type TextSearchMatch,
   type ThreadActivityItem,
@@ -157,6 +161,7 @@ import {
 } from "@/lib/tauri"
 import { useOutsideClick } from "@/lib/use-outside-click"
 import { cn } from "@/lib/utils"
+import { GUI_UPDATE_RELEASE_URL, shouldSuppressDeferredUpdatePrompt } from "@/features/settings/update-settings"
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>
 
@@ -168,6 +173,7 @@ const ChevronLeftIcon = ChevronLeft as IconComponent
 const ChevronRightIcon = ChevronRight as IconComponent
 const Clock3Icon = Clock3 as IconComponent
 const CopyIcon = Copy as IconComponent
+const DownloadIcon = Download as IconComponent
 const Edit3Icon = Edit3 as IconComponent
 const ExternalLinkIcon = ExternalLink as IconComponent
 const FileTextIcon = FileText as IconComponent
@@ -919,6 +925,8 @@ export function App() {
   }, [utilityPanel])
   const [openMenu, setOpenMenu] = useState<AppMenu | null>(null)
   const [renameThreadDraft, setRenameThreadDraft] = useState<RenameThreadDraft | null>(null)
+  const [updatePrompt, setUpdatePrompt] = useState<GuiUpdateCheckResult | null>(null)
+  const [manualUpdateResult, setManualUpdateResult] = useState<GuiUpdateCheckResult | null>(null)
   const titleMenuRegionRef = useRef<HTMLDivElement>(null)
   const projectOrganizeRegionRef = useRef<HTMLDivElement>(null)
   useOutsideClick(titleMenuRegionRef, () => setOpenMenu(null), Boolean(openMenu))
@@ -934,6 +942,7 @@ export function App() {
   const deepLinkSignatureRef = useRef<string | null>(null)
   const renamedTitleSignature = useRef(new Set<string>())
   const sessionStatusSignature = useRef<string | null>(null)
+  const startupUpdateCheckSignature = useRef<string | null>(null)
 
   function switchView(view: AppView) {
     setOpenMenu(null)
@@ -1013,6 +1022,46 @@ export function App() {
   const workspaceName = workspace?.name ?? getPathName(workspace?.path)
   const connectedBaseUrl = (server?.baseUrl ?? serverUrl.trim()) || DEFAULT_SERVER_URL
   const browserRuntimeServer = useMemo(() => browserMcpServerForRuntime(resolvedGuiSettings), [resolvedGuiSettings])
+  const manualUpdateCheck = useMutation({
+    mutationFn: guiUpdateCheck,
+    onSuccess: (result) => {
+      setManualUpdateResult(result)
+      if (result.available) setUpdatePrompt(result)
+    },
+  })
+  const installGuiUpdate = useMutation({
+    mutationFn: guiUpdateInstall,
+  })
+
+  useEffect(() => {
+    if (!init.data || !guiSettings.isFetched || !resolvedGuiSettings.autoUpdateCheck) return
+    const signature = [
+      init.data.version,
+      resolvedGuiSettings.deferredUpdateVersion ?? "",
+      resolvedGuiSettings.deferredUpdateAt ?? 0,
+    ].join("\0")
+    if (startupUpdateCheckSignature.current === signature) return
+    startupUpdateCheckSignature.current = signature
+
+    let disposed = false
+    void guiUpdateCheck()
+      .then((result) => {
+        if (disposed || !result.available) return
+        if (shouldSuppressDeferredUpdatePrompt(resolvedGuiSettings, result.version)) return
+        setUpdatePrompt(result)
+      })
+      .catch(() => {
+        // Startup update checks are opportunistic; manual checks surface errors in settings.
+      })
+
+    return () => {
+      disposed = true
+    }
+  }, [
+    guiSettings.isFetched,
+    init.data,
+    resolvedGuiSettings,
+  ])
 
   const sessions = useQuery({
     queryKey: syncQueryKeys.sessions(server?.baseUrl, workspace?.path),
@@ -1999,6 +2048,35 @@ export function App() {
     await settingsSet(GUI_SETTINGS_KEY, nextSettings)
   }
 
+  function openGuiUpdateRelease() {
+    void openUrl(GUI_UPDATE_RELEASE_URL).catch((error) => {
+      window.alert(`打开失败：${getErrorMessage(error)}`)
+    })
+  }
+
+  function runManualUpdateCheck() {
+    manualUpdateCheck.reset()
+    manualUpdateCheck.mutate()
+  }
+
+  function installPromptUpdate() {
+    installGuiUpdate.reset()
+    installGuiUpdate.mutate()
+  }
+
+  function deferPromptUpdate() {
+    const version = updatePrompt?.version
+    setUpdatePrompt(null)
+    installGuiUpdate.reset()
+    if (!version) return
+    void persistGuiSettingsPatch({
+      deferredUpdateVersion: version,
+      deferredUpdateAt: Date.now(),
+    }).catch(() => {
+      // Deferral persistence is best-effort; the dialog is already dismissed for this run.
+    })
+  }
+
   function toggleModelFavorite(model: { providerId: string; id: string }) {
     const current = normalizeGuiSettings(
       queryClient.getQueryData<Partial<GuiSettings>>(["settings", GUI_SETTINGS_KEY]) ?? resolvedGuiSettings,
@@ -2859,11 +2937,17 @@ export function App() {
             connectPending={connectServer.isPending}
             disconnectPending={disconnectServer.isPending}
             refreshPending={refreshServer.isPending}
+            appVersion={init.data?.version}
+            updateCheckPending={manualUpdateCheck.isPending}
+            updateCheckResult={manualUpdateResult}
+            updateCheckError={manualUpdateCheck.error}
             error={connectServer.error ?? disconnectServer.error ?? refreshServer.error}
             onServerUrlChange={setServerUrl}
             onConnect={(mode) => connectServer.mutate({ mode })}
             onDisconnect={() => disconnectServer.mutate()}
             onRefresh={() => refreshServer.mutate()}
+            onManualUpdateCheck={runManualUpdateCheck}
+            onOpenUpdateRelease={openGuiUpdateRelease}
             onBack={() => switchView("workbench")}
           />
         </div>
@@ -3171,6 +3255,16 @@ export function App() {
           onClose={() => setUtilityPanel(null)}
         />
       ) : null}
+      {updatePrompt ? (
+        <GuiUpdatePrompt
+          update={updatePrompt}
+          busy={installGuiUpdate.isPending}
+          error={installGuiUpdate.error}
+          onInstall={installPromptUpdate}
+          onLater={deferPromptUpdate}
+          onOpenRelease={openGuiUpdateRelease}
+        />
+      ) : null}
       {renameThreadDraft ? (
         <RenameThreadDialog
           value={renameThreadDraft.value}
@@ -3197,6 +3291,91 @@ export function App() {
         />
       ) : null}
     </div>
+  )
+}
+
+function GuiUpdatePrompt({
+  update,
+  busy,
+  error,
+  onInstall,
+  onLater,
+  onOpenRelease,
+}: {
+  update: GuiUpdateCheckResult
+  busy?: boolean
+  error?: unknown
+  onInstall: () => void
+  onLater: () => void
+  onOpenRelease: () => void
+}) {
+  return (
+    <section
+      role="dialog"
+      aria-modal="false"
+      aria-label="发现新版本"
+      className="fixed bottom-5 right-5 z-[120] w-[min(420px,calc(100vw-32px))] rounded-xl border border-[var(--app-border)] bg-[var(--app-panel)] p-4 shadow-2xl shadow-black/35"
+      data-no-window-drag
+    >
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--app-accent-soft)] text-[var(--app-accent)]">
+          <DownloadIcon className="h-[18px] w-[18px]" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold text-[var(--app-text)]">发现新版本 v{update.version}</div>
+          <div className="mt-1 text-xs leading-5 text-[var(--app-muted)]">
+            当前版本 v{update.currentVersion}。安装完成后将重启 OpenCode GUI。
+          </div>
+        </div>
+        <button
+          type="button"
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+          title="稍后"
+          disabled={busy}
+          onClick={onLater}
+        >
+          <XIcon className="h-4 w-4" />
+        </button>
+      </div>
+      {update.body ? (
+        <div className="mt-3 max-h-[72px] overflow-hidden rounded-lg bg-[var(--app-panel-2)] px-3 py-2 text-xs leading-5 text-[var(--app-muted)]">
+          {update.body}
+        </div>
+      ) : null}
+      {error ? (
+        <div className="mt-3 rounded-lg border border-[var(--app-danger)]/30 bg-[var(--app-danger-soft)] px-3 py-2 text-xs font-medium text-[var(--app-danger)]">
+          {getErrorMessage(error)}
+        </div>
+      ) : null}
+      <div className="mt-4 flex flex-wrap justify-end gap-2">
+        <button
+          type="button"
+          className="inline-flex h-9 items-center gap-2 rounded-lg px-3 text-sm font-medium text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] disabled:opacity-50"
+          disabled={busy}
+          onClick={onOpenRelease}
+        >
+          <ExternalLinkIcon className="h-4 w-4" />
+          Release
+        </button>
+        <button
+          type="button"
+          className="h-9 rounded-lg px-3 text-sm font-medium text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] disabled:opacity-50"
+          disabled={busy}
+          onClick={onLater}
+        >
+          稍后
+        </button>
+        <button
+          type="button"
+          className="inline-flex h-9 items-center gap-2 rounded-lg bg-[var(--app-text)] px-3 text-sm font-semibold text-[var(--app-bg)] hover:opacity-90 disabled:opacity-50"
+          disabled={busy}
+          onClick={onInstall}
+        >
+          {busy ? <Loader2Icon className="h-4 w-4 animate-spin" /> : <DownloadIcon className="h-4 w-4" />}
+          安装并重启
+        </button>
+      </div>
+    </section>
   )
 }
 

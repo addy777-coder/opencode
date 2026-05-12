@@ -1,6 +1,7 @@
 use std::{env, fs, path::PathBuf};
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=TAURI_UPDATER_PUBKEY");
     ensure_dev_sidecar_placeholder();
     tauri_build::build()
 }

@@ -68,6 +68,7 @@ import {
   sessionUpdateArchived,
   settingsGet,
   settingsSet,
+  type GuiUpdateCheckResult,
   type OpenCodeMessage,
   type OpenCodeModel,
   type OpenCodeSession,
@@ -77,6 +78,7 @@ import {
   type ServerStatus,
 } from "@/lib/tauri"
 import { cn } from "@/lib/utils"
+import { GUI_UPDATE_RELEASE_URL } from "./update-settings"
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>
 
@@ -204,6 +206,9 @@ export type GuiSettings = {
   browserUse: boolean
   browserHeadless: boolean
   computerUse: boolean
+  autoUpdateCheck: boolean
+  deferredUpdateVersion?: string | null
+  deferredUpdateAt?: number | null
   archiveRetention: "30d" | "90d" | "forever"
   guiSessionRegistry: Record<string, GuiSessionRecord>
 }
@@ -312,6 +317,9 @@ export const DEFAULT_GUI_SETTINGS: GuiSettings = {
   browserUse: true,
   browserHeadless: true,
   computerUse: false,
+  autoUpdateCheck: true,
+  deferredUpdateVersion: null,
+  deferredUpdateAt: null,
   archiveRetention: "90d",
   guiSessionRegistry: {},
 }
@@ -337,11 +345,17 @@ type SettingsWorkspaceProps = {
   connectPending?: boolean
   disconnectPending?: boolean
   refreshPending?: boolean
+  appVersion?: string | null
+  updateCheckPending?: boolean
+  updateCheckResult?: GuiUpdateCheckResult | null
+  updateCheckError?: unknown
   error?: unknown
   onServerUrlChange: (value: string) => void
   onConnect: (mode?: GuiSettings["serverMode"]) => void
   onDisconnect: () => void
   onRefresh: () => void
+  onManualUpdateCheck?: () => void
+  onOpenUpdateRelease?: () => void
   onBack: () => void
 }
 
@@ -790,6 +804,9 @@ export function normalizeGuiSettings(value?: Partial<GuiSettings> | null): GuiSe
     darkUiFont: normalizeUiFont(merged.darkUiFont),
     darkCodeFont: normalizeCodeFont(merged.darkCodeFont),
     fontSize: normalizeFontSize(merged.fontSize),
+    autoUpdateCheck: typeof merged.autoUpdateCheck === "boolean" ? merged.autoUpdateCheck : true,
+    deferredUpdateVersion: normalizeOptionalString((raw as { deferredUpdateVersion?: unknown }).deferredUpdateVersion),
+    deferredUpdateAt: normalizeTimestamp((raw as { deferredUpdateAt?: unknown }).deferredUpdateAt, 0) || null,
   }
   normalized.permissionMode = coercePermissionMode(normalized.permissionMode, normalized)
   normalized.permissionModesByWorkspace = normalizePermissionModesByWorkspace(
@@ -1021,11 +1038,17 @@ export function SettingsWorkspace({
   connectPending = false,
   disconnectPending = false,
   refreshPending = false,
+  appVersion,
+  updateCheckPending = false,
+  updateCheckResult,
+  updateCheckError,
   error,
   onServerUrlChange,
   onConnect,
   onDisconnect,
   onRefresh,
+  onManualUpdateCheck,
+  onOpenUpdateRelease,
   onBack,
 }: SettingsWorkspaceProps) {
   const queryClient = useQueryClient()
@@ -1077,7 +1100,18 @@ export function SettingsWorkspace({
   const content = useMemo(() => {
     switch (activeTab) {
       case "general":
-        return <GeneralSettings settings={settings} onChange={updateSettings} />
+        return (
+          <GeneralSettings
+            settings={settings}
+            appVersion={appVersion}
+            updateCheckPending={updateCheckPending}
+            updateCheckResult={updateCheckResult}
+            updateCheckError={updateCheckError}
+            onChange={updateSettings}
+            onManualUpdateCheck={onManualUpdateCheck}
+            onOpenUpdateRelease={onOpenUpdateRelease}
+          />
+        )
       case "statistics":
         return (
           <StatisticsSettings
@@ -1158,14 +1192,20 @@ export function SettingsWorkspace({
     }
   }, [
     activeTab,
+    appVersion,
     connectPending,
     disconnectPending,
     refreshPending,
     server,
     settings,
+    updateCheckError,
+    updateCheckPending,
+    updateCheckResult,
     workspaceDirectory,
     onConnect,
     onDisconnect,
+    onManualUpdateCheck,
+    onOpenUpdateRelease,
     onRefresh,
   ])
 
@@ -2609,13 +2649,84 @@ function StatisticsMetricCard({ label, value, detail }: { label: string; value: 
 
 function GeneralSettings({
   settings,
+  appVersion,
+  updateCheckPending,
+  updateCheckResult,
+  updateCheckError,
   onChange,
+  onManualUpdateCheck,
+  onOpenUpdateRelease,
 }: {
   settings: GuiSettings
+  appVersion?: string | null
+  updateCheckPending?: boolean
+  updateCheckResult?: GuiUpdateCheckResult | null
+  updateCheckError?: unknown
   onChange: (patch: Partial<GuiSettings>) => void
+  onManualUpdateCheck?: () => void
+  onOpenUpdateRelease?: () => void
 }) {
+  const updateStatus = updateCheckPending
+    ? "正在检查更新..."
+    : updateCheckError
+      ? `检查失败：${getErrorMessage(updateCheckError)}`
+      : updateCheckResult?.available
+        ? `发现新版本 v${updateCheckResult.version}`
+        : updateCheckResult
+          ? "已是最新版本"
+          : "启动时检查 GitHub release，发现新版本时提示安装并重启。"
+
   return (
     <div className="space-y-11">
+      <SettingsSection title="更新">
+        <div className="divide-y divide-[var(--app-divider)]">
+          <SettingRow
+            icon={RefreshCwIcon}
+            title="自动检查更新"
+            description="启动时检查 GitHub release，发现新版本时提示安装并重启。"
+            control={
+              <Switch checked={settings.autoUpdateCheck} onChange={(value) => onChange({ autoUpdateCheck: value })} />
+            }
+          />
+          <SettingRow
+            icon={ExternalLinkIcon}
+            title="当前版本"
+            description={
+              <div className="space-y-1">
+                <div className="font-medium text-[var(--app-text)]">v{appVersion ?? "未知"}</div>
+                <button
+                  type="button"
+                  className="inline-flex max-w-full items-center gap-1.5 truncate text-left text-[13px] font-medium text-[var(--app-text)] hover:text-[var(--app-accent)]"
+                  onClick={onOpenUpdateRelease}
+                >
+                  <ExternalLinkIcon className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">{GUI_UPDATE_RELEASE_URL}</span>
+                </button>
+                <div
+                  className={cn(
+                    "text-[12px] leading-5",
+                    updateCheckError ? "text-[var(--app-danger)]" : "text-[var(--app-muted)]",
+                  )}
+                >
+                  {updateStatus}
+                </div>
+              </div>
+            }
+            control={
+              <button
+                type="button"
+                className="inline-flex h-9 items-center gap-2 rounded-md border border-[var(--app-border)] bg-[var(--app-input)] px-3 text-[13px] font-medium text-[var(--app-text)] hover:bg-[var(--app-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={updateCheckPending || !onManualUpdateCheck}
+                onClick={onManualUpdateCheck}
+              >
+                <RefreshCwIcon className={cn("h-4 w-4", updateCheckPending && "animate-spin")} />
+                立即检查
+              </button>
+            }
+          />
+        </div>
+      </SettingsSection>
+
       <SettingsSection title="权限">
         <div className="divide-y divide-[var(--app-divider)]">
           <SettingRow
@@ -4727,7 +4838,7 @@ function SettingRow({
 }: {
   icon: IconComponent
   title: string
-  description: string
+  description: ReactNode
   control: ReactNode
 }) {
   return (

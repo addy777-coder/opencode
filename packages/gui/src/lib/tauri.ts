@@ -642,6 +642,15 @@ export type AppInitResult = {
   server: ServerStatus
 }
 
+export type GuiUpdateCheckResult = {
+  available: boolean
+  currentVersion: string
+  version?: string | null
+  body?: string | null
+  date?: number | null
+  releaseUrl: string
+}
+
 const hasTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
 
 const fallback: AppInitResult = {
@@ -720,6 +729,25 @@ async function sessionUpdateArchivedHttp(input: SessionUpdateArchivedInput): Pro
 export async function appInit(): Promise<AppInitResult> {
   if (!hasTauri()) return fallback
   return invoke<AppInitResult>("app_init")
+}
+
+export async function guiUpdateCheck(): Promise<GuiUpdateCheckResult> {
+  if (!hasTauri()) {
+    return {
+      available: false,
+      currentVersion: fallback.version,
+      version: null,
+      body: null,
+      date: null,
+      releaseUrl: "https://github.com/addy777-coder/opencode/releases",
+    }
+  }
+  return invoke<GuiUpdateCheckResult>("gui_update_check")
+}
+
+export async function guiUpdateInstall(): Promise<void> {
+  if (!hasTauri()) throw new Error("请通过 Tauri 启动以安装更新")
+  return invoke<void>("gui_update_install")
 }
 
 export async function serverStatus(): Promise<ServerStatus> {

@@ -15,9 +15,13 @@ pub fn run() {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_opener::init());
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+
+    let app = builder
         .setup(|app| {
             let handle = app.handle().clone();
             let state =
@@ -27,6 +31,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_init,
+            commands::gui_update_check,
+            commands::gui_update_install,
             commands::server_start,
             commands::server_stop,
             commands::server_status,
