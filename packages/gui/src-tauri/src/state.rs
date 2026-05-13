@@ -19,6 +19,7 @@ pub struct AppInfo {
 #[derive(Debug)]
 pub struct ManagedServerChild {
     pub base_url: String,
+    pub proxy_signature: String,
     pub child: Child,
 }
 

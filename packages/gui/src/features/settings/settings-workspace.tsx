@@ -25,6 +25,7 @@ import {
   Loader2,
   Monitor,
   Moon,
+  Network,
   Plus,
   RotateCcw,
   PanelRight,
@@ -62,6 +63,7 @@ import {
   mcpAdd,
   mcpDisconnect,
   mcpStatus,
+  networkProxyTest,
   openPath,
   sessionList,
   sessionMessages,
@@ -74,6 +76,7 @@ import {
   type OpenCodeSession,
   type McpServerConfig,
   type McpStatusInfo,
+  type NetworkProxyConfig,
   type PermissionRule,
   type ServerStatus,
 } from "@/lib/tauri"
@@ -97,6 +100,7 @@ const Globe2Icon = Globe2 as IconComponent
 const Loader2Icon = Loader2 as IconComponent
 const MonitorIcon = Monitor as IconComponent
 const MoonIcon = Moon as IconComponent
+const NetworkIcon = Network as IconComponent
 const PlusIcon = Plus as IconComponent
 const RotateCcwIcon = RotateCcw as IconComponent
 const PanelRightIcon = PanelRight as IconComponent
@@ -200,6 +204,13 @@ export type GuiSettings = {
   mcpServerList: GuiMcpServer[]
   gitAutoDetect: boolean
   gitDiffView: "inline" | "split"
+  networkProxyEnabled: boolean
+  networkProxyProtocol: NetworkProxyProtocol
+  networkProxyHost: string
+  networkProxyPort: string
+  networkProxyUsername: string
+  networkProxyPassword: string
+  networkProxyNoProxy: string
   environmentProfile: "default" | "project"
   environmentVariables: string
   browserMcpSettingsVersion: number
@@ -212,6 +223,8 @@ export type GuiSettings = {
   archiveRetention: "30d" | "90d" | "forever"
   guiSessionRegistry: Record<string, GuiSessionRecord>
 }
+
+export type NetworkProxyProtocol = "http" | "https"
 
 export type GuiMcpServer = {
   id: string
@@ -311,6 +324,13 @@ export const DEFAULT_GUI_SETTINGS: GuiSettings = {
   mcpServerList: [DEFAULT_BROWSER_MCP_SERVER],
   gitAutoDetect: true,
   gitDiffView: "inline",
+  networkProxyEnabled: false,
+  networkProxyProtocol: "http",
+  networkProxyHost: "127.0.0.1",
+  networkProxyPort: "7890",
+  networkProxyUsername: "",
+  networkProxyPassword: "",
+  networkProxyNoProxy: "localhost,127.0.0.1,::1",
   environmentProfile: "default",
   environmentVariables: "",
   browserMcpSettingsVersion: BROWSER_MCP_SETTINGS_VERSION,
@@ -333,6 +353,7 @@ type SettingsTab =
   | "models"
   | "mcp"
   | "git"
+  | "networkProxy"
   | "environment"
   | "browser"
   | "computer"
@@ -374,6 +395,7 @@ const settingsNav: NavItem[] = [
   { id: "models", label: "模型", icon: StarIcon },
   { id: "mcp", label: "MCP 服务器", icon: BlocksIcon },
   { id: "git", label: "Git", icon: GitBranchIcon },
+  { id: "networkProxy", label: "网络代理", icon: NetworkIcon },
   { id: "environment", label: "环境", icon: TerminalSquareIcon },
   { id: "browser", label: "浏览器使用", icon: Globe2Icon },
   { id: "computer", label: "电脑操控", icon: PanelRightIcon },
@@ -449,6 +471,22 @@ function normalizeCodeFont(value?: string | null) {
 function normalizeFontSize(value?: number | null) {
   if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_GUI_SETTINGS.fontSize
   return Math.min(18, Math.max(12, Math.round(value)))
+}
+
+function normalizeNetworkProxyProtocol(value: unknown): NetworkProxyProtocol {
+  return value === "https" ? "https" : "http"
+}
+
+function normalizeNetworkProxyString(value: unknown, fallback = "") {
+  return typeof value === "string" ? value : fallback
+}
+
+function normalizeNetworkProxyPort(value: unknown) {
+  const raw = typeof value === "number" ? String(value) : typeof value === "string" ? value.trim() : ""
+  if (!raw) return DEFAULT_GUI_SETTINGS.networkProxyPort
+  const numeric = Number(raw)
+  if (!Number.isInteger(numeric) || numeric < 1 || numeric > 65535) return DEFAULT_GUI_SETTINGS.networkProxyPort
+  return String(numeric)
 }
 
 function normalizeOptionalString(value: unknown) {
@@ -804,6 +842,13 @@ export function normalizeGuiSettings(value?: Partial<GuiSettings> | null): GuiSe
     darkUiFont: normalizeUiFont(merged.darkUiFont),
     darkCodeFont: normalizeCodeFont(merged.darkCodeFont),
     fontSize: normalizeFontSize(merged.fontSize),
+    networkProxyEnabled: typeof merged.networkProxyEnabled === "boolean" ? merged.networkProxyEnabled : false,
+    networkProxyProtocol: normalizeNetworkProxyProtocol(merged.networkProxyProtocol),
+    networkProxyHost: normalizeNetworkProxyString(merged.networkProxyHost, DEFAULT_GUI_SETTINGS.networkProxyHost),
+    networkProxyPort: normalizeNetworkProxyPort(merged.networkProxyPort),
+    networkProxyUsername: normalizeNetworkProxyString(merged.networkProxyUsername),
+    networkProxyPassword: normalizeNetworkProxyString(merged.networkProxyPassword),
+    networkProxyNoProxy: normalizeNetworkProxyString(merged.networkProxyNoProxy, DEFAULT_GUI_SETTINGS.networkProxyNoProxy),
     autoUpdateCheck: typeof merged.autoUpdateCheck === "boolean" ? merged.autoUpdateCheck : true,
     deferredUpdateVersion: normalizeOptionalString((raw as { deferredUpdateVersion?: unknown }).deferredUpdateVersion),
     deferredUpdateAt: normalizeTimestamp((raw as { deferredUpdateAt?: unknown }).deferredUpdateAt, 0) || null,
@@ -814,6 +859,36 @@ export function normalizeGuiSettings(value?: Partial<GuiSettings> | null): GuiSe
     normalized,
   )
   return normalized
+}
+
+export function buildNetworkProxyConfig(settings: GuiSettings): NetworkProxyConfig | null {
+  if (!settings.networkProxyEnabled) return null
+  const port = Number(settings.networkProxyPort)
+  return {
+    enabled: true,
+    protocol: settings.networkProxyProtocol,
+    host: settings.networkProxyHost.trim(),
+    port: Number.isInteger(port) ? port : null,
+    username: normalizeOptionalString(settings.networkProxyUsername),
+    password: settings.networkProxyPassword || null,
+    noProxy: normalizeOptionalString(settings.networkProxyNoProxy),
+  }
+}
+
+export function networkProxySettingsSignature(settings: GuiSettings) {
+  const proxy = buildNetworkProxyConfig(settings)
+  return proxy ? JSON.stringify(proxy) : "disabled"
+}
+
+function proxyUrlPreview(settings: GuiSettings, maskPassword = true) {
+  const proxy = buildNetworkProxyConfig(settings)
+  if (!proxy?.host || !proxy.port) return null
+  const auth = proxy.username
+    ? `${encodeURIComponent(proxy.username)}${
+        proxy.password ? `:${maskPassword ? "******" : encodeURIComponent(proxy.password)}` : ""
+      }@`
+    : ""
+  return `${proxy.protocol}://${auth}${proxy.host}:${proxy.port}`
 }
 
 function isPermissionMode(value: unknown): value is PermissionMode {
@@ -1165,6 +1240,8 @@ export function SettingsWorkspace({
         )
       case "git":
         return <GitSettings settings={settings} onChange={updateSettings} />
+      case "networkProxy":
+        return <NetworkProxySettings settings={settings} onChange={updateSettings} />
       case "environment":
         return <EnvironmentSettings settings={settings} onChange={updateSettings} />
       case "browser":
@@ -4008,6 +4085,163 @@ function GitSettings({
             }
           />
         </div>
+      </SettingsSection>
+    </div>
+  )
+}
+
+const NETWORK_PROXY_TEST_TARGETS = [
+  { value: "https://api.anthropic.com/", label: "Anthropic API" },
+  { value: "https://api.github.com/repos/addy777-coder/opencode/releases/latest", label: "GitHub Release" },
+  { value: "https://api.openai.com/v1/models", label: "OpenAI API" },
+]
+
+function NetworkProxySettings({
+  settings,
+  onChange,
+}: {
+  settings: GuiSettings
+  onChange: (patch: Partial<GuiSettings>) => void
+}) {
+  const [targetUrl, setTargetUrl] = useState(NETWORK_PROXY_TEST_TARGETS[0].value)
+  const preview = proxyUrlPreview(settings)
+  const enabled = settings.networkProxyEnabled
+  const configComplete = Boolean(preview)
+  const testConnection = useMutation({
+    mutationFn: () =>
+      networkProxyTest({
+        proxy: buildNetworkProxyConfig(settings),
+        targetUrl,
+      }),
+  })
+  const status = !enabled ? "未启用" : configComplete ? "已启用" : "配置不完整"
+  const statusDetail = !enabled
+    ? "状态：未启用"
+    : configComplete
+      ? `状态：${preview}`
+      : "状态：请填写主机和端口"
+  const testResult = testConnection.data
+
+  return (
+    <div className="space-y-8">
+      <SettingsSection title="网络代理" description="给本地 OpenCode server、GitHub release 检查和应用更新设置网络代理。">
+        <div className="divide-y divide-[var(--app-divider)]">
+          <SettingRow
+            icon={NetworkIcon}
+            title="启用代理"
+            description="启用后，重新连接本地 OpenCode server 会带上 HTTP_PROXY、HTTPS_PROXY、ALL_PROXY 和 NO_PROXY。"
+            control={<Switch checked={enabled} onChange={(value) => onChange({ networkProxyEnabled: value })} />}
+          />
+          <div className="space-y-5 px-5 py-5">
+            <div className="grid gap-4 md:grid-cols-[150px_minmax(0,1fr)]">
+              <div>
+                <div className="mb-2 text-[13px] font-semibold text-[var(--app-text)]">协议</div>
+                <SelectControl
+                  value={settings.networkProxyProtocol}
+                  onChange={(value) => onChange({ networkProxyProtocol: value as NetworkProxyProtocol })}
+                  options={[
+                    { value: "http", label: "HTTP" },
+                    { value: "https", label: "HTTPS" },
+                  ]}
+                />
+              </div>
+              <div>
+                <div className="mb-2 text-[13px] font-semibold text-[var(--app-text)]">主机</div>
+                <input
+                  value={settings.networkProxyHost}
+                  disabled={!enabled}
+                  onChange={(event) => onChange({ networkProxyHost: event.target.value })}
+                  className={cn(mcpInputClass, "border-[var(--app-border)] [font-family:var(--app-code-font)]", !enabled && "opacity-60")}
+                  placeholder="127.0.0.1"
+                />
+              </div>
+            </div>
+            <div className="grid gap-4 md:grid-cols-[150px_minmax(0,1fr)_minmax(0,1fr)]">
+              <div>
+                <div className="mb-2 text-[13px] font-semibold text-[var(--app-text)]">端口</div>
+                <input
+                  value={settings.networkProxyPort}
+                  disabled={!enabled}
+                  inputMode="numeric"
+                  onChange={(event) => onChange({ networkProxyPort: event.target.value.replace(/[^\d]/g, "") })}
+                  className={cn(mcpInputClass, "border-[var(--app-border)] tabular-nums", !enabled && "opacity-60")}
+                  placeholder="7890"
+                />
+              </div>
+              <div>
+                <div className="mb-2 text-[13px] font-semibold text-[var(--app-text)]">用户名</div>
+                <input
+                  value={settings.networkProxyUsername}
+                  disabled={!enabled}
+                  onChange={(event) => onChange({ networkProxyUsername: event.target.value })}
+                  className={cn(mcpInputClass, "border-[var(--app-border)]", !enabled && "opacity-60")}
+                  placeholder="可选"
+                />
+              </div>
+              <div>
+                <div className="mb-2 text-[13px] font-semibold text-[var(--app-text)]">密码</div>
+                <input
+                  value={settings.networkProxyPassword}
+                  disabled={!enabled}
+                  type="password"
+                  onChange={(event) => onChange({ networkProxyPassword: event.target.value })}
+                  className={cn(mcpInputClass, "border-[var(--app-border)]", !enabled && "opacity-60")}
+                  placeholder="可选"
+                />
+              </div>
+            </div>
+            <div>
+              <div className="mb-2 text-[13px] font-semibold text-[var(--app-text)]">不走代理（NO_PROXY）</div>
+              <textarea
+                value={settings.networkProxyNoProxy}
+                disabled={!enabled}
+                onChange={(event) => onChange({ networkProxyNoProxy: event.target.value })}
+                className={cn(
+                  "h-[86px] w-full resize-none rounded-md border border-[var(--app-border)] bg-[var(--app-input)] px-3 py-2 [font-family:var(--app-code-font)] text-[13px] leading-5 text-[var(--app-text)] outline-none placeholder:text-[var(--app-muted)] focus:border-[var(--app-accent)]",
+                  !enabled && "opacity-60",
+                )}
+                placeholder="localhost,127.0.0.1,::1"
+              />
+            </div>
+          </div>
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title="当前预览">
+        <div className="px-5 py-4">
+          <div className="text-[15px] font-semibold text-[var(--app-text)]">{status}</div>
+          <div className="mt-2 break-all [font-family:var(--app-code-font)] text-[12.5px] leading-5 text-[var(--app-muted)]">
+            {statusDetail}
+          </div>
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title="测试连接" description="通过代理访问目标 URL，只检测连通性，不修改设置。">
+        <div className="flex flex-col gap-4 px-5 py-4 md:flex-row md:items-center">
+          <div className="min-w-0 flex-1">
+            <div className="mb-2 text-[13px] font-semibold text-[var(--app-text)]">目标</div>
+            <SelectControl value={targetUrl} onChange={setTargetUrl} options={NETWORK_PROXY_TEST_TARGETS} />
+          </div>
+          <button
+            type="button"
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-[var(--app-accent)] px-4 text-[13px] font-medium text-[var(--app-accent-contrast)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 md:mt-7"
+            disabled={testConnection.isPending || (enabled && !configComplete)}
+            onClick={() => testConnection.mutate()}
+          >
+            {testConnection.isPending ? <Loader2Icon className="h-4 w-4 animate-spin" /> : <PlugIcon className="h-4 w-4" />}
+            测试
+          </button>
+        </div>
+        {testConnection.error || testResult ? (
+          <div
+            className={cn(
+              "border-t border-[var(--app-divider)] px-5 py-4 text-[13px] leading-6",
+              testResult?.ok ? "text-[var(--app-text)]" : "text-[var(--app-danger)]",
+            )}
+          >
+            {testConnection.error ? getErrorMessage(testConnection.error) : testResult?.message}
+          </div>
+        ) : null}
       </SettingsSection>
     </div>
   )

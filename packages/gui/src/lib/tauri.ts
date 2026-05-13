@@ -12,6 +12,34 @@ export type ServerStatus = {
 export type ServerStartInput = {
   baseUrl?: string
   mode?: "local" | "remote"
+  proxy?: NetworkProxyConfig | null
+}
+
+export type NetworkProxyConfig = {
+  enabled: boolean
+  protocol: "http" | "https"
+  host: string
+  port?: number | null
+  username?: string | null
+  password?: string | null
+  noProxy?: string | null
+}
+
+export type GuiUpdateInput = {
+  proxy?: NetworkProxyConfig | null
+}
+
+export type NetworkProxyTestInput = {
+  proxy?: NetworkProxyConfig | null
+  targetUrl: string
+}
+
+export type NetworkProxyTestResult = {
+  ok: boolean
+  status?: number | null
+  url: string
+  message: string
+  elapsedMs: number
 }
 
 export type WorkspaceRecord = {
@@ -731,7 +759,7 @@ export async function appInit(): Promise<AppInitResult> {
   return invoke<AppInitResult>("app_init")
 }
 
-export async function guiUpdateCheck(): Promise<GuiUpdateCheckResult> {
+export async function guiUpdateCheck(input: GuiUpdateInput = {}): Promise<GuiUpdateCheckResult> {
   if (!hasTauri()) {
     return {
       available: false,
@@ -742,12 +770,25 @@ export async function guiUpdateCheck(): Promise<GuiUpdateCheckResult> {
       releaseUrl: "https://github.com/addy777-coder/opencode/releases",
     }
   }
-  return invoke<GuiUpdateCheckResult>("gui_update_check")
+  return invoke<GuiUpdateCheckResult>("gui_update_check", { input })
 }
 
-export async function guiUpdateInstall(): Promise<void> {
+export async function guiUpdateInstall(input: GuiUpdateInput = {}): Promise<void> {
   if (!hasTauri()) throw new Error("请通过 Tauri 启动以安装更新")
-  return invoke<void>("gui_update_install")
+  return invoke<void>("gui_update_install", { input })
+}
+
+export async function networkProxyTest(input: NetworkProxyTestInput): Promise<NetworkProxyTestResult> {
+  if (!hasTauri()) {
+    return {
+      ok: false,
+      status: null,
+      url: input.targetUrl,
+      message: "请通过 Tauri 启动以测试网络代理",
+      elapsedMs: 0,
+    }
+  }
+  return invoke<NetworkProxyTestResult>("network_proxy_test", { input })
 }
 
 export async function serverStatus(): Promise<ServerStatus> {

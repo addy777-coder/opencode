@@ -37,6 +37,24 @@ pub struct ServerStatus {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkProxyConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub protocol: String,
+    #[serde(default)]
+    pub host: String,
+    pub port: Option<u16>,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub no_proxy: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
@@ -400,14 +418,146 @@ pub async fn check_health(base_url: &str) -> Result<bool, reqwest::Error> {
     Ok(response.status().is_success())
 }
 
-pub async fn start_local_server(app: &AppHandle, base_url: &str) -> Result<Child, String> {
+pub fn network_proxy_signature(proxy: Option<&NetworkProxyConfig>) -> Result<String, String> {
+    let Some(config) = proxy.filter(|config| config.enabled) else {
+        return Ok("disabled".to_string());
+    };
+    let proxy_url = network_proxy_url(config)?;
+    let no_proxy = config
+        .no_proxy
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_default();
+    Ok(format!("{}|{}", proxy_url.as_str(), no_proxy))
+}
+
+pub fn apply_network_proxy(
+    builder: reqwest::ClientBuilder,
+    proxy: Option<&NetworkProxyConfig>,
+) -> Result<reqwest::ClientBuilder, String> {
+    let Some(proxy) = network_reqwest_proxy(proxy)? else {
+        return Ok(builder);
+    };
+    Ok(builder.proxy(proxy))
+}
+
+pub fn network_reqwest_proxy(
+    proxy: Option<&NetworkProxyConfig>,
+) -> Result<Option<reqwest::Proxy>, String> {
+    let Some(config) = proxy.filter(|config| config.enabled) else {
+        return Ok(None);
+    };
+    let proxy_url = network_proxy_url(config)?;
+    let no_proxy = config
+        .no_proxy
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(reqwest::NoProxy::from_string);
+    let proxy = reqwest::Proxy::all(proxy_url.as_str())
+        .map_err(|error| format!("网络代理地址无效：{error}"))?
+        .no_proxy(no_proxy);
+    Ok(Some(proxy))
+}
+
+pub fn network_proxy_bypasses_host(config: &NetworkProxyConfig, host: &str) -> bool {
+    let host = host.trim().trim_matches('.').to_ascii_lowercase();
+    if host.is_empty() {
+        return false;
+    }
+    let Some(no_proxy) = config.no_proxy.as_deref() else {
+        return false;
+    };
+
+    no_proxy.split(',').any(|entry| {
+        let entry = entry.trim().trim_matches('.').to_ascii_lowercase();
+        if entry.is_empty() {
+            return false;
+        }
+        if entry == "*" {
+            return true;
+        }
+        let entry = entry
+            .strip_prefix('.')
+            .unwrap_or(entry.as_str())
+            .trim_matches('.');
+        host == entry || host.ends_with(&format!(".{entry}"))
+    })
+}
+
+pub fn network_proxy_url(config: &NetworkProxyConfig) -> Result<reqwest::Url, String> {
+    let protocol = match config.protocol.trim().to_ascii_lowercase().as_str() {
+        "" | "http" => "http",
+        "https" => "https",
+        other => return Err(format!("暂不支持的代理协议：{other}")),
+    };
+    let host = config.host.trim();
+    if host.is_empty() {
+        return Err("请填写网络代理主机。".to_string());
+    }
+    let port = config
+        .port
+        .ok_or_else(|| "请填写网络代理端口。".to_string())?;
+    if port == 0 {
+        return Err("网络代理端口必须在 1-65535 之间。".to_string());
+    }
+
+    let mut url = reqwest::Url::parse(&format!("{protocol}://{host}:{port}"))
+        .map_err(|error| format!("网络代理地址无效：{error}"))?;
+    if let Some(username) = config
+        .username
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        url.set_username(username)
+            .map_err(|_| "网络代理用户名无效。".to_string())?;
+        if let Some(password) = config.password.as_deref() {
+            url.set_password(Some(password))
+                .map_err(|_| "网络代理密码无效。".to_string())?;
+        }
+    }
+    Ok(url)
+}
+
+fn network_proxy_env(proxy: Option<&NetworkProxyConfig>) -> Result<Vec<(String, String)>, String> {
+    let Some(config) = proxy.filter(|config| config.enabled) else {
+        return Ok(Vec::new());
+    };
+    let proxy_url = network_proxy_url(config)?.to_string();
+    let mut env = vec![
+        ("HTTP_PROXY".to_string(), proxy_url.clone()),
+        ("HTTPS_PROXY".to_string(), proxy_url.clone()),
+        ("ALL_PROXY".to_string(), proxy_url.clone()),
+        ("http_proxy".to_string(), proxy_url.clone()),
+        ("https_proxy".to_string(), proxy_url.clone()),
+        ("all_proxy".to_string(), proxy_url),
+    ];
+    if let Some(no_proxy) = config
+        .no_proxy
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        env.push(("NO_PROXY".to_string(), no_proxy.to_string()));
+        env.push(("no_proxy".to_string(), no_proxy.to_string()));
+    }
+    Ok(env)
+}
+
+pub async fn start_local_server(
+    app: &AppHandle,
+    base_url: &str,
+    proxy: Option<&NetworkProxyConfig>,
+) -> Result<Child, String> {
     let (hostname, port) = local_server_bind(base_url)?;
     let args = local_server_args(&hostname, &port);
 
     if let Some(sidecar) = bundled_server_binary(app) {
         let mut command = Command::new(&sidecar);
         command.args(&args);
-        return spawn_local_server(command, "内置 OpenCode backend");
+        return spawn_local_server(command, "内置 OpenCode backend", proxy);
     }
 
     if !cfg!(debug_assertions) {
@@ -415,7 +565,7 @@ pub async fn start_local_server(app: &AppHandle, base_url: &str) -> Result<Child
     }
 
     let command = dev_source_server_command(&args)?;
-    spawn_local_server(command, "开发源码 OpenCode server")
+    spawn_local_server(command, "开发源码 OpenCode server", proxy)
 }
 
 fn local_server_bind(base_url: &str) -> Result<(String, String), String> {
@@ -452,8 +602,16 @@ fn dev_source_server_command(server_args: &[String]) -> Result<Command, String> 
     Ok(command)
 }
 
-fn spawn_local_server(mut command: Command, launcher: &str) -> Result<Child, String> {
+fn spawn_local_server(
+    mut command: Command,
+    launcher: &str,
+    proxy: Option<&NetworkProxyConfig>,
+) -> Result<Child, String> {
     hide_windows_console(&mut command);
+
+    for (key, value) in network_proxy_env(proxy)? {
+        command.env(key, value);
+    }
 
     let child = command
         .env("OPENCODE_CLIENT", "desktop")

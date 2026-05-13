@@ -44,6 +44,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   buildOpenCodePermissionRules,
+  buildNetworkProxyConfig,
   buildPersonalizationSystemPrompt,
   browserMcpServerForRuntime,
   canApplyMcpServer,
@@ -54,6 +55,7 @@ import {
   GUI_SETTINGS_KEY,
   mcpServerConfig,
   normalizeGuiSettings,
+  networkProxySettingsSignature,
   permissionWorkspaceKey,
   removeGuiSessionRecord,
   setProjectPermissionMode,
@@ -1017,20 +1019,25 @@ export function App() {
     () => buildPersonalizationSystemPrompt(resolvedGuiSettings),
     [resolvedGuiSettings],
   )
+  const networkProxyConfig = useMemo(() => buildNetworkProxyConfig(resolvedGuiSettings), [resolvedGuiSettings])
+  const networkProxySignature = useMemo(
+    () => networkProxySettingsSignature(resolvedGuiSettings),
+    [resolvedGuiSettings],
+  )
 
   const server = status.data ?? init.data?.server
   const workspaceName = workspace?.name ?? getPathName(workspace?.path)
   const connectedBaseUrl = (server?.baseUrl ?? serverUrl.trim()) || DEFAULT_SERVER_URL
   const browserRuntimeServer = useMemo(() => browserMcpServerForRuntime(resolvedGuiSettings), [resolvedGuiSettings])
   const manualUpdateCheck = useMutation({
-    mutationFn: guiUpdateCheck,
+    mutationFn: () => guiUpdateCheck({ proxy: networkProxyConfig }),
     onSuccess: (result) => {
       setManualUpdateResult(result)
       if (result.available) setUpdatePrompt(result)
     },
   })
   const installGuiUpdate = useMutation({
-    mutationFn: guiUpdateInstall,
+    mutationFn: () => guiUpdateInstall({ proxy: networkProxyConfig }),
   })
 
   useEffect(() => {
@@ -1039,12 +1046,13 @@ export function App() {
       init.data.version,
       resolvedGuiSettings.deferredUpdateVersion ?? "",
       resolvedGuiSettings.deferredUpdateAt ?? 0,
+      networkProxySignature,
     ].join("\0")
     if (startupUpdateCheckSignature.current === signature) return
     startupUpdateCheckSignature.current = signature
 
     let disposed = false
-    void guiUpdateCheck()
+    void guiUpdateCheck({ proxy: networkProxyConfig })
       .then((result) => {
         if (disposed || !result.available) return
         if (shouldSuppressDeferredUpdatePrompt(resolvedGuiSettings, result.version)) return
@@ -1060,6 +1068,8 @@ export function App() {
   }, [
     guiSettings.isFetched,
     init.data,
+    networkProxyConfig,
+    networkProxySignature,
     resolvedGuiSettings,
   ])
 
@@ -1831,6 +1841,7 @@ export function App() {
       serverStart({
         baseUrl: input?.baseUrl?.trim() || serverUrl.trim() || DEFAULT_SERVER_URL,
         mode: input?.mode ?? resolvedGuiSettings.serverMode,
+        proxy: networkProxyConfig,
       }),
     onSuccess: (next) => {
       queryClient.setQueryData(["server-status"], next)

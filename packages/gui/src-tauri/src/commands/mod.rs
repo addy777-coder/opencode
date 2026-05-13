@@ -84,6 +84,30 @@ pub struct FileTreeEntry {
 pub struct ServerStartInput {
     pub base_url: Option<String>,
     pub mode: Option<ServerMode>,
+    pub proxy: Option<opencode::NetworkProxyConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiUpdateInput {
+    pub proxy: Option<opencode::NetworkProxyConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkProxyTestInput {
+    pub proxy: Option<opencode::NetworkProxyConfig>,
+    pub target_url: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkProxyTestResult {
+    pub ok: bool,
+    pub status: Option<u16>,
+    pub url: String,
+    pub message: String,
+    pub elapsed_ms: u128,
 }
 
 #[derive(Debug, Deserialize)]
@@ -482,6 +506,7 @@ enum ManagedChildAction {
 fn managed_child_action(
     managed: &mut ManagedServerChild,
     requested_base_url: Option<&str>,
+    requested_proxy_signature: Option<&str>,
 ) -> ManagedChildAction {
     match managed.child.try_wait() {
         Ok(Some(_)) => return ManagedChildAction::DropExited,
@@ -495,16 +520,32 @@ fn managed_child_action(
         }
     }
 
+    if let Some(proxy_signature) = requested_proxy_signature {
+        if managed.proxy_signature != proxy_signature {
+            return ManagedChildAction::Stop;
+        }
+    }
+
     ManagedChildAction::Keep
 }
 
-async fn reconcile_managed_child(state: &AppState, requested_base_url: &str) {
+async fn reconcile_managed_child(
+    state: &AppState,
+    requested_base_url: &str,
+    requested_proxy_signature: &str,
+) {
     let mut child_to_stop = None;
     {
         let mut child_guard = state.opencode_child.lock().await;
         let action = child_guard
             .as_mut()
-            .map(|managed| managed_child_action(managed, Some(requested_base_url)))
+            .map(|managed| {
+                managed_child_action(
+                    managed,
+                    Some(requested_base_url),
+                    Some(requested_proxy_signature),
+                )
+            })
             .unwrap_or(ManagedChildAction::Keep);
 
         match action {
@@ -558,24 +599,38 @@ fn gui_update_pubkey() -> Result<&'static str, String> {
 }
 
 #[cfg(desktop)]
-fn gui_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
+fn gui_updater(
+    app: &AppHandle,
+    proxy: Option<&opencode::NetworkProxyConfig>,
+) -> Result<tauri_plugin_updater::Updater, String> {
     let endpoint = reqwest::Url::parse(GUI_UPDATE_ENDPOINT).map_err(command_error)?;
-    app.updater_builder()
+    let endpoint_host = endpoint.host_str().unwrap_or_default().to_string();
+    let mut builder = app
+        .updater_builder()
         .endpoints(vec![endpoint])
         .map_err(command_error)?
-        .pubkey(gui_update_pubkey()?)
-        .build()
-        .map_err(command_error)
+        .pubkey(gui_update_pubkey()?);
+    if let Some(proxy) = proxy.filter(|proxy| {
+        proxy.enabled && !opencode::network_proxy_bypasses_host(proxy, &endpoint_host)
+    }) {
+        builder = builder.proxy(opencode::network_proxy_url(proxy)?);
+    }
+    builder.build().map_err(command_error)
 }
 
 #[tauri::command]
 #[cfg(desktop)]
 pub async fn gui_update_check(
+    input: Option<GuiUpdateInput>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<GuiUpdateCheckResult, String> {
     let current_version = state.info.version.clone();
-    let update = gui_updater(&app)?.check().await.map_err(command_error)?;
+    let proxy = input.as_ref().and_then(|input| input.proxy.as_ref());
+    let update = gui_updater(&app, proxy)?
+        .check()
+        .await
+        .map_err(command_error)?;
     Ok(match update {
         Some(update) => GuiUpdateCheckResult {
             available: true,
@@ -598,8 +653,12 @@ pub async fn gui_update_check(
 
 #[tauri::command]
 #[cfg(desktop)]
-pub async fn gui_update_install(app: AppHandle) -> Result<(), String> {
-    let update = gui_updater(&app)?
+pub async fn gui_update_install(
+    input: Option<GuiUpdateInput>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let proxy = input.as_ref().and_then(|input| input.proxy.as_ref());
+    let update = gui_updater(&app, proxy)?
         .check()
         .await
         .map_err(command_error)?
@@ -614,7 +673,10 @@ pub async fn gui_update_install(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 #[cfg(mobile)]
-pub async fn gui_update_check(state: State<'_, AppState>) -> Result<GuiUpdateCheckResult, String> {
+pub async fn gui_update_check(
+    _input: Option<GuiUpdateInput>,
+    state: State<'_, AppState>,
+) -> Result<GuiUpdateCheckResult, String> {
     Ok(GuiUpdateCheckResult {
         available: false,
         current_version: state.info.version.clone(),
@@ -627,8 +689,52 @@ pub async fn gui_update_check(state: State<'_, AppState>) -> Result<GuiUpdateChe
 
 #[tauri::command]
 #[cfg(mobile)]
-pub async fn gui_update_install() -> Result<(), String> {
+pub async fn gui_update_install(_input: Option<GuiUpdateInput>) -> Result<(), String> {
     Err("移动端暂不支持 GUI 自动更新。".to_string())
+}
+
+#[tauri::command]
+pub async fn network_proxy_test(
+    input: NetworkProxyTestInput,
+) -> Result<NetworkProxyTestResult, String> {
+    let url = reqwest::Url::parse(input.target_url.trim())
+        .map_err(|error| format!("测试目标 URL 无效：{error}"))?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("测试目标 URL 只支持 HTTP 或 HTTPS。".to_string());
+    }
+
+    let started = std::time::Instant::now();
+    let client = opencode::apply_network_proxy(
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(8))
+            .timeout(std::time::Duration::from_secs(20)),
+        input.proxy.as_ref(),
+    )?
+    .build()
+    .map_err(|error| format!("创建网络测试客户端失败：{error}"))?;
+
+    let response = client.get(url.clone()).header("accept", "*/*").send().await;
+    let elapsed_ms = started.elapsed().as_millis();
+
+    Ok(match response {
+        Ok(response) => {
+            let status = response.status();
+            NetworkProxyTestResult {
+                ok: true,
+                status: Some(status.as_u16()),
+                url: url.to_string(),
+                message: format!("连接成功：HTTP {}，耗时 {}ms", status.as_u16(), elapsed_ms),
+                elapsed_ms,
+            }
+        }
+        Err(error) => NetworkProxyTestResult {
+            ok: false,
+            status: None,
+            url: url.to_string(),
+            message: format!("连接失败：{error}"),
+            elapsed_ms,
+        },
+    })
 }
 
 #[tauri::command]
@@ -643,9 +749,10 @@ pub async fn server_start(
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "http://127.0.0.1:4096".to_string());
     let mode = input.mode.unwrap_or(ServerMode::Local);
+    let proxy_signature = opencode::network_proxy_signature(input.proxy.as_ref())?;
 
     if matches!(mode, ServerMode::Local) {
-        reconcile_managed_child(&state, &base_url).await;
+        reconcile_managed_child(&state, &base_url, &proxy_signature).await;
     } else {
         stop_managed_child(&state).await;
     }
@@ -658,7 +765,7 @@ pub async fn server_start(
             .as_mut()
             .map(|managed| {
                 matches!(
-                    managed_child_action(managed, Some(&base_url)),
+                    managed_child_action(managed, Some(&base_url), Some(&proxy_signature)),
                     ManagedChildAction::DropExited | ManagedChildAction::Stop
                 )
             })
@@ -667,9 +774,10 @@ pub async fn server_start(
             *child_guard = None;
         }
         if child_guard.is_none() {
-            let child = opencode::start_local_server(&app, &base_url).await?;
+            let child = opencode::start_local_server(&app, &base_url, input.proxy.as_ref()).await?;
             *child_guard = Some(ManagedServerChild {
                 base_url: base_url.clone(),
+                proxy_signature: proxy_signature.clone(),
                 child,
             });
         }

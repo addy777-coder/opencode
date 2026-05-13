@@ -33,6 +33,7 @@ pub fn run() {
             commands::app_init,
             commands::gui_update_check,
             commands::gui_update_install,
+            commands::network_proxy_test,
             commands::server_start,
             commands::server_stop,
             commands::server_status,
