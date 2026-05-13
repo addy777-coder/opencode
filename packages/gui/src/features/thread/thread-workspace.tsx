@@ -1966,6 +1966,14 @@ export function ThreadWorkspace({
           onReply={(value) => permissions[0] && void reply(permissions[0], value)}
         />
       ) : null}
+      {!permissions.length && questions.length && onQuestionReply && onQuestionReject ? (
+        <QuestionPrompt
+          info={questions[0]}
+          count={questions.length}
+          onReply={onQuestionReply}
+          onReject={onQuestionReject}
+        />
+      ) : null}
       <section className="flex min-w-0 flex-1 flex-col">
         {!emptyState ? (
           <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--app-divider)] px-5">
@@ -2133,17 +2141,6 @@ export function ThreadWorkspace({
                       <DiffSummaryCard diffs={standaloneDiffs} onOpenDiff={openDiffInPanel} onOpenReview={openReviewInPanel} />
                     </div>
                   ) : null}
-                  {onQuestionReply && onQuestionReject
-                    ? questions.map((question) => (
-                        <div key={question.id} className="mt-5">
-                          <QuestionPrompt
-                            info={question}
-                            onReply={onQuestionReply}
-                            onReject={onQuestionReject}
-                          />
-                        </div>
-                      ))
-                    : null}
                 </div>
               ) : !hasLiveActivity ? (
                 null
