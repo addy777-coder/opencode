@@ -1190,6 +1190,19 @@ export function maxOutputTokens(model: Provider.Model): number {
 }
 
 export function schema(model: Provider.Model, schema: JSONSchema.BaseSchema | JSONSchema7): JSONSchema7 {
+  const normalizeRequired = (obj: unknown): unknown => {
+    if (obj === null || typeof obj !== "object") return obj
+    if (Array.isArray(obj)) return obj.map(normalizeRequired)
+
+    const result = Object.fromEntries(Object.entries(obj).map(([key, value]) => [key, normalizeRequired(value)]))
+    if ("required" in result && !Array.isArray(result.required)) {
+      result.required = []
+    }
+    return result
+  }
+
+  schema = normalizeRequired(schema) as JSONSchema.BaseSchema | JSONSchema7
+
   /*
   if (["openai", "azure"].includes(providerID)) {
     if (schema.type === "object" && schema.properties) {

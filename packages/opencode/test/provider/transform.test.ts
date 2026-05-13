@@ -532,6 +532,52 @@ describe("ProviderTransform.schema - gemini array items", () => {
   })
 })
 
+describe("ProviderTransform.schema - required normalization", () => {
+  const openAICompatibleModel = {
+    providerID: "custom-mp3fsa1y-1",
+    api: {
+      id: "max",
+      npm: "@ai-sdk/openai-compatible",
+    },
+  } as any
+
+  test("converts null required fields to empty arrays", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        options: {
+          type: "object",
+          properties: {
+            includeHidden: { type: "boolean" },
+          },
+          required: null,
+        },
+      },
+      required: null,
+    } as any
+
+    const result = ProviderTransform.schema(openAICompatibleModel, schema) as any
+
+    expect(result.required).toEqual([])
+    expect(result.properties.options.required).toEqual([])
+  })
+
+  test("keeps valid required arrays unchanged", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+      },
+      required: ["query"],
+    } as any
+
+    const result = ProviderTransform.schema(openAICompatibleModel, schema) as any
+
+    expect(result.required).toEqual(["query"])
+  })
+})
+
 describe("ProviderTransform.schema - gemini nested array items", () => {
   const geminiModel = {
     providerID: "google",
