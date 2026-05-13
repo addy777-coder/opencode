@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { QueryClient } from "@tanstack/react-query"
-import type { OpenCodeMessage, PermissionInfo } from "@/lib/tauri"
-import { applyOpenCodeEventToQueryCache } from "./query-cache"
+import type { OpenCodeMessage, OpenCodeSession, PermissionInfo } from "@/lib/tauri"
+import { applyOpenCodeEventToQueryCache, upsertSessionInQueryCache } from "./query-cache"
 import { syncQueryKeys } from "./query-keys"
 
 describe("sync query cache reducer", () => {
@@ -74,5 +74,36 @@ describe("sync query cache reducer", () => {
     )
 
     expect(queryClient.getQueryData<PermissionInfo[]>(key)).toEqual([])
+  })
+
+  test("seeds a created session into the scoped list before refetch", () => {
+    const queryClient = new QueryClient()
+    const key = syncQueryKeys.sessions("http://server", "D:/repo")
+    queryClient.setQueryData<OpenCodeSession[]>(key, [
+      {
+        id: "ses_old",
+        title: "Old",
+        directory: "D:/repo",
+        projectName: "repo",
+        createdAt: 1,
+        updatedAt: 1,
+        archivedAt: null,
+        changedFiles: 0,
+      },
+    ])
+    const session: OpenCodeSession = {
+      id: "ses_new",
+      title: "New",
+      directory: "D:/repo",
+      projectName: "repo",
+      createdAt: 2,
+      updatedAt: 2,
+      archivedAt: null,
+      changedFiles: 0,
+    }
+
+    upsertSessionInQueryCache(queryClient, { baseUrl: "http://server", directory: "D:/repo" }, session)
+
+    expect(queryClient.getQueryData<OpenCodeSession[]>(key)?.map((item) => item.id)).toEqual(["ses_new", "ses_old"])
   })
 })

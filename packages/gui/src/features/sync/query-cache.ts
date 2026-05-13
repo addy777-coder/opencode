@@ -24,7 +24,7 @@ import {
   statusFromOpenCodeEvent,
   unwrapOpenCodeEvent,
 } from "./opencode-event"
-import { matchesScopedQueryKey, type SyncQueryTarget } from "./query-keys"
+import { matchesScopedQueryKey, syncQueryKeys, type SyncQueryTarget } from "./query-keys"
 
 export type SyncEventApplyResult = {
   type: string | null
@@ -52,7 +52,7 @@ export function applyOpenCodeEventToQueryCache(
     case "session.created":
     case "session.updated": {
       if (session?.archivedAt) removeSession(queryClient, { ...target, sessionId: session.id })
-      else if (session) upsertSession(queryClient, target, session)
+      else if (session) upsertSessionInQueryCache(queryClient, target, session)
       invalidateSessions(queryClient, target)
       invalidateArchivedSessions(queryClient)
       break
@@ -261,11 +261,15 @@ function messageQueries(target: SyncQueryTarget) {
   }
 }
 
-function upsertSession(queryClient: QueryClient, target: SyncQueryTarget, session: OpenCodeSession) {
+export function upsertSessionInQueryCache(queryClient: QueryClient, target: SyncQueryTarget, session: OpenCodeSession) {
   queryClient.setQueriesData<OpenCodeSession[]>(sessionQueries(target), (current) => {
-    if (!current) return current
-    return upsertById(current, session, compareSessionUpdatedDesc)
+    return upsertById(current ?? [], session, compareSessionUpdatedDesc)
   })
+  if (!target.directory) return
+  queryClient.setQueryData<OpenCodeSession[]>(
+    syncQueryKeys.sessions(target.baseUrl, target.directory),
+    (current) => upsertById(current ?? [], session, compareSessionUpdatedDesc),
+  )
 }
 
 function removeSession(queryClient: QueryClient, target: SyncQueryTarget) {

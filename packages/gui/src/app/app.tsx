@@ -89,6 +89,7 @@ import {
   invalidateSessionMessages,
   invalidateArchivedSessions,
   invalidateSessions,
+  upsertSessionInQueryCache,
 } from "@/features/sync/query-cache"
 import { prefetchSessionMessages } from "@/features/sync/prefetch"
 import {
@@ -109,6 +110,7 @@ import {
   guiUpdateCheck,
   guiUpdateInstall,
   mcpAdd,
+  mcpStatus,
   openPath,
   openUrl,
   permissionList,
@@ -2128,13 +2130,26 @@ export function App() {
     }
   }
 
+  function cacheWorkspaceSession(session: OpenCodeSession, targetWorkspace?: WorkspaceRecord | null) {
+    const directory = session.directory ?? targetWorkspace?.path ?? workspace?.path ?? null
+    const cached = directory && session.directory !== directory ? { ...session, directory } : session
+    upsertSessionInQueryCache(queryClient, { baseUrl: server?.baseUrl, directory }, cached)
+    return cached
+  }
+
   async function ensureBrowserMcp() {
     if (!server?.healthy || !connectedBaseUrl || !workspace?.path) return
     if (!browserRuntimeServer || !canApplyMcpServer(browserRuntimeServer)) return
+    const name = browserRuntimeServer.name.trim()
+    const current = await mcpStatus({
+      baseUrl: connectedBaseUrl,
+      directory: workspace.path,
+    })
+    if (current[name]?.status === "connected") return
     await mcpAdd({
       baseUrl: connectedBaseUrl,
       directory: workspace.path,
-      name: browserRuntimeServer.name.trim(),
+      name,
       config: mcpServerConfig(browserRuntimeServer),
     })
   }
@@ -2175,8 +2190,9 @@ export function App() {
     },
     onSuccess: ({ session, workspace: saved }) => {
       queryClient.setQueryData(["settings", CURRENT_WORKSPACE_KEY], saved)
-      void persistGuiSessionRecord(guiRecordFromSession(session, saved))
-      setActiveThreadId(session.id)
+      const cachedSession = cacheWorkspaceSession(session, saved)
+      void persistGuiSessionRecord(guiRecordFromSession(cachedSession, saved))
+      setActiveThreadId(cachedSession.id)
       setActiveView("workbench")
       setUtilityPanel(null)
       void queryClient.invalidateQueries({ queryKey: ["workspaces"] })
@@ -2206,8 +2222,9 @@ export function App() {
     },
     onSuccess: ({ session, workspace: saved }) => {
       queryClient.setQueryData(["settings", CURRENT_WORKSPACE_KEY], saved)
-      void persistGuiSessionRecord(guiRecordFromSession(session, saved))
-      setActiveThreadId(session.id)
+      const cachedSession = cacheWorkspaceSession(session, saved)
+      void persistGuiSessionRecord(guiRecordFromSession(cachedSession, saved))
+      setActiveThreadId(cachedSession.id)
       setActiveView("workbench")
       setUtilityPanel(null)
       void queryClient.invalidateQueries({ queryKey: ["workspaces"] })
@@ -2233,8 +2250,9 @@ export function App() {
           directory: workspace.path,
           permission: permissionRules,
         })
-        target = sessionToThread(session, workspaceName, workspace.path)
-        setActiveThreadId(session.id)
+        const cachedSession = cacheWorkspaceSession(session, workspace)
+        target = sessionToThread(cachedSession, workspaceName, workspace.path)
+        setActiveThreadId(cachedSession.id)
         setActiveView("workbench")
       }
 
@@ -2396,20 +2414,21 @@ export function App() {
         sessionId: input.sessionId,
         messageId: input.boundaryMessageId === undefined ? input.message.id : input.boundaryMessageId ?? undefined,
       })
+      const cachedSession = cacheWorkspaceSession(session, workspace)
 
       if (text) {
         ensureSelectedProviderReady()
-        setPendingPromptRefresh({ threadId: session.id, startedAt: Date.now() })
+        setPendingPromptRefresh({ threadId: cachedSession.id, startedAt: Date.now() })
         setRunningSessionIds((current) => {
           const next = new Set(current)
-          next.add(session.id)
+          next.add(cachedSession.id)
           return next
         })
         try {
           await sessionPrompt({
             baseUrl: connectedBaseUrl,
-            directory: session.directory ?? activeSessionDirectory,
-            sessionId: session.id,
+            directory: cachedSession.directory ?? activeSessionDirectory,
+            sessionId: cachedSession.id,
             text,
             system: personalizationSystemPrompt,
             agent: selectedAgent ?? undefined,
@@ -2418,18 +2437,18 @@ export function App() {
             permission: permissionRules,
           })
         } catch (error) {
-          setPendingPromptRefresh((current) => (current?.threadId === session.id ? null : current))
+          setPendingPromptRefresh((current) => (current?.threadId === cachedSession.id ? null : current))
           setRunningSessionIds((current) => {
-            if (!current.has(session.id)) return current
+            if (!current.has(cachedSession.id)) return current
             const next = new Set(current)
-            next.delete(session.id)
+            next.delete(cachedSession.id)
             return next
           })
           throw error
         }
       }
 
-      return { session }
+      return { session: cachedSession }
     },
     onSuccess: ({ session }) => {
       void persistGuiSessionRecord(guiRecordFromSession(session, workspace))

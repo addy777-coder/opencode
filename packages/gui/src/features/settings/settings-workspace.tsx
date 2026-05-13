@@ -4133,10 +4133,11 @@ function NetworkProxySettings({
             control={<Switch checked={enabled} onChange={(value) => onChange({ networkProxyEnabled: value })} />}
           />
           <div className="space-y-5 px-5 py-5">
-            <div className="grid gap-4 md:grid-cols-[150px_minmax(0,1fr)]">
+            <div className="grid gap-4 md:grid-cols-[180px_minmax(0,1fr)]">
               <div>
                 <div className="mb-2 text-[13px] font-semibold text-[var(--app-text)]">协议</div>
                 <SelectControl
+                  className="min-w-0"
                   value={settings.networkProxyProtocol}
                   onChange={(value) => onChange({ networkProxyProtocol: value as NetworkProxyProtocol })}
                   options={[
@@ -5167,17 +5168,19 @@ function SelectControl({
   value,
   options,
   onChange,
+  className,
 }: {
   value: string
   options: Array<{ value: string; label: string }>
   onChange: (value: string) => void
+  className?: string
 }) {
   const [open, setOpen] = useState(false)
   const selected = options.find((option) => option.value === value) ?? options[0]
 
   return (
     <div
-      className="relative min-w-[210px]"
+      className={cn("relative min-w-[210px]", className)}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
           setOpen(false)
