@@ -656,6 +656,7 @@ pub async fn gui_update_check(
 pub async fn gui_update_install(
     input: Option<GuiUpdateInput>,
     app: AppHandle,
+    state: State<'_, AppState>,
 ) -> Result<(), String> {
     let proxy = input.as_ref().and_then(|input| input.proxy.as_ref());
     let update = gui_updater(&app, proxy)?
@@ -663,6 +664,8 @@ pub async fn gui_update_install(
         .await
         .map_err(command_error)?
         .ok_or_else(|| "当前已经是最新版本。".to_string())?;
+
+    shutdown_managed_server(&state).await;
 
     update
         .download_and_install(|_, _| {}, || {})
