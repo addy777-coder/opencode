@@ -220,6 +220,16 @@ jobs:
             throw "Updater signature not found at $signaturePath."
           }
 
+          $releaseInstallerName = $installer.Name -replace "\s+", "."
+          if ($releaseInstallerName -ne $installer.Name) {
+            $releaseInstallerPath = Join-Path $installer.DirectoryName $releaseInstallerName
+            $releaseSignaturePath = "$releaseInstallerPath.sig"
+            Move-Item -LiteralPath $installer.FullName -Destination $releaseInstallerPath -Force
+            Move-Item -LiteralPath $signaturePath -Destination $releaseSignaturePath -Force
+            $installer = Get-Item -LiteralPath $releaseInstallerPath
+            $signaturePath = $releaseSignaturePath
+          }
+
           $downloadUrl = "https://github.com/$repo/releases/download/$tag/$([System.Uri]::EscapeDataString($installer.Name))"
           $latest = [ordered]@{
             version = $version
