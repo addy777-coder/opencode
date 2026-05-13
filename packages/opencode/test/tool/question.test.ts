@@ -81,6 +81,33 @@ describe("tool.question", () => {
     }),
   )
 
+  it.instance("should preserve closed-choice custom setting", () =>
+    Effect.gen(function* () {
+      const question = yield* Question.Service
+      const toolInfo = yield* QuestionTool
+      const tool = yield* toolInfo.init()
+      const questions = [
+        {
+          question: "Which UI direction should we use?",
+          header: "UI Direction",
+          custom: false,
+          options: [
+            { label: "Work-focused (Recommended)", description: "Dense, quiet, and task-oriented" },
+            { label: "Playful", description: "More expressive and animated" },
+          ],
+        },
+      ]
+
+      const fiber = yield* tool.execute({ questions }, ctx).pipe(Effect.forkScoped)
+      const item = yield* pending(question)
+      expect(item.questions[0].custom).toBe(false)
+      yield* question.reply({ requestID: item.id, answers: [["Work-focused (Recommended)"]] })
+
+      const result = yield* Fiber.join(fiber)
+      expect(result.output).toContain(`"Which UI direction should we use?"="Work-focused (Recommended)"`)
+    }),
+  )
+
   // intentionally removed the zod validation due to tool call errors, hoping prompting is gonna be good enough
   //   test("should throw an Error for header exceeding 30 characters", async () => {
   //     const tool = await QuestionTool.init()

@@ -172,6 +172,7 @@ describe("tool parameters", () => {
         ],
       })
       expect(parsed.questions.length).toBe(1)
+      expect(parsed.questions[0].custom).toBe(false)
     })
     test("rejects missing questions", () => {
       expect(accepts(Question, {})).toBe(false)

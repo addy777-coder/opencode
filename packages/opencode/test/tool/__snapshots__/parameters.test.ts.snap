@@ -219,6 +219,10 @@ exports[`tool parameters JSON Schema (wire shape) question 1`] = `
       "description": "Questions to ask",
       "items": {
         "properties": {
+          "custom": {
+            "description": "Allow typing a custom answer (default: true)",
+            "type": "boolean",
+          },
           "header": {
             "description": "Very short label (max 30 chars)",
             "type": "string",

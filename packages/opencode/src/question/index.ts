@@ -36,14 +36,12 @@ const base = {
   multiple: Schema.optional(Schema.Boolean).annotate({
     description: "Allow selecting multiple choices",
   }),
-}
-
-export class Info extends Schema.Class<Info>("QuestionInfo")({
-  ...base,
   custom: Schema.optional(Schema.Boolean).annotate({
     description: "Allow typing a custom answer (default: true)",
   }),
-}) {
+}
+
+export class Info extends Schema.Class<Info>("QuestionInfo")(base) {
   static readonly zod = zod(this)
 }
 
