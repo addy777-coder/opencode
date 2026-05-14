@@ -245,9 +245,10 @@ const BROWSER_MCP_KEYWORDS = ["playwright", "browser", "chromium", "chrome", "pu
 const BROWSER_MCP_PERMISSION_PATTERNS = ["*playwright*", "*browser*", "*chromium*", "*chrome*", "*puppeteer*", "*webkit*"]
 const PLAYWRIGHT_MCP_NAME = "playwright"
 const PLAYWRIGHT_INSTALL_HINT = "npx playwright install chromium"
-const PLAYWRIGHT_MCP_TIMEOUT = 30_000
+const LEGACY_PLAYWRIGHT_MCP_TIMEOUT = 30_000
+const PLAYWRIGHT_MCP_TIMEOUT = 60_000
 const DEFAULT_BROWSER_MCP_SERVER_ID = "mcp-browser-playwright-default"
-const BROWSER_MCP_SETTINGS_VERSION = 1
+const BROWSER_MCP_SETTINGS_VERSION = 2
 const GUI_SESSION_REGISTRY_LIMIT = 500
 
 function playwrightMcpArgs(headless: boolean) {
@@ -638,6 +639,13 @@ function syncPlaywrightHeadless(server: GuiMcpServer, headless: boolean): GuiMcp
   }
 }
 
+function migrateBrowserMcpServer(server: GuiMcpServer, version: number): GuiMcpServer {
+  if (version >= BROWSER_MCP_SETTINGS_VERSION) return server
+  if (!hasPlaywrightMcpPackage(server)) return server
+  if (server.timeout !== LEGACY_PLAYWRIGHT_MCP_TIMEOUT) return server
+  return { ...server, timeout: PLAYWRIGHT_MCP_TIMEOUT }
+}
+
 export function isBrowserMcpServer(server: GuiMcpServer) {
   const haystack = [server.name, server.command, server.args, server.url].join(" ").toLowerCase()
   return BROWSER_MCP_KEYWORDS.some((keyword) => haystack.includes(keyword))
@@ -815,16 +823,21 @@ export function normalizeGuiSettings(value?: Partial<GuiSettings> | null): GuiSe
   const guiSessionRegistry = normalizeGuiSessionRegistry(
     (raw as { guiSessionRegistry?: unknown }).guiSessionRegistry,
   )
+  const browserMcpSettingsVersion =
+    typeof (raw as { browserMcpSettingsVersion?: unknown }).browserMcpSettingsVersion === "number"
+      ? (raw as { browserMcpSettingsVersion: number }).browserMcpSettingsVersion
+      : 0
   const normalizedMcpServers = normalizeMcpServerList((raw as { mcpServerList?: unknown }).mcpServerList, merged.mcpServers)
   const needsDefaultBrowserMcp =
     !normalizedMcpServers.some(isBrowserMcpServer) &&
     (!("browserMcpSettingsVersion" in raw) || merged.browserUse)
-  const mcpServerList = needsDefaultBrowserMcp
+  const mcpServerListBase = needsDefaultBrowserMcp
     ? [
         ...normalizedMcpServers,
         createBrowserMcpServer(DEFAULT_BROWSER_MCP_SERVER_ID, merged.browserHeadless),
       ]
     : normalizedMcpServers
+  const mcpServerList = mcpServerListBase.map((server) => migrateBrowserMcpServer(server, browserMcpSettingsVersion))
   const normalized: GuiSettings = {
     ...merged,
     ...(palette ?? {}),
