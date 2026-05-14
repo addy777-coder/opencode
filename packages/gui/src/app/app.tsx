@@ -2154,6 +2154,10 @@ export function App() {
     })
   }
 
+  function warmBrowserMcp() {
+    void ensureBrowserMcp().catch(() => undefined)
+  }
+
   function ensureSelectedProviderReady() {
     if (!selectedModelInfo) {
       throw new Error("请先到设置 > API 供应商添加供应商、添加或获取模型，并选择一个可用模型。")
@@ -2241,7 +2245,7 @@ export function App() {
       if (!server?.healthy) throw new Error("请先连接 OpenCode server")
       if (!workspace?.path) throw new Error("请先选择项目")
       ensureSelectedProviderReady()
-      await ensureBrowserMcp()
+      warmBrowserMcp()
 
       let target = activeThread
       if (!target || target.local) {
@@ -2407,7 +2411,7 @@ export function App() {
       if (!server?.healthy) throw new Error("请先连接 OpenCode server")
       if (!activeSessionDirectory) throw new Error("请先选择项目")
       const text = input.text?.trim()
-      if (text) await ensureBrowserMcp()
+      if (text) warmBrowserMcp()
       const session = await sessionFork({
         baseUrl: connectedBaseUrl,
         directory: activeSessionDirectory,
