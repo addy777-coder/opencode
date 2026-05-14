@@ -6,10 +6,12 @@ import {
   useState,
   type ClipboardEvent,
   type ComponentType,
+  type Dispatch,
   type DragEvent,
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type SetStateAction,
   type SVGProps,
 } from "react"
 import {
@@ -55,6 +57,8 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { parsePromptTrigger, type PromptTrigger } from "@/features/prompt/triggers"
 import { TerminalWorkspace } from "@/features/terminal/terminal-workspace"
 import { shouldShowStandaloneThreadDiffSummary } from "@/features/thread/thread-diff-summary"
+import { preparePromptSubmission, type PromptSubmissionAttachment } from "@/features/thread/thread-submission"
+import { buildThreadTimelineItems, type ThreadTimelineItem } from "@/features/thread/thread-timeline"
 import {
   fallbackProgressStepsFromActivities,
   generatedResultsFromDiffs,
@@ -135,13 +139,7 @@ export type ThreadSummary = {
   local?: boolean
 }
 
-export type PromptAttachment = {
-  id: string
-  name: string
-  mime: string
-  url: string
-  size: number
-}
+export type PromptAttachment = PromptSubmissionAttachment
 
 type Props = {
   thread?: ThreadSummary
@@ -175,6 +173,8 @@ type Props = {
   permissionMode?: string
   permissionOptions?: PermissionComposerOption[]
   error?: unknown
+  composerDraft?: string
+  setComposerDraft?: Dispatch<SetStateAction<string>>
   onSend: (text: string, attachments: PromptAttachment[]) => Promise<unknown>
   onAbort: () => Promise<unknown>
   onPickWorkspace?: () => void
@@ -741,6 +741,52 @@ function isRunnablePart(part: MessagePart) {
   return true
 }
 
+type MessageImageAttachment = {
+  key: string
+  url: string
+  mime: string
+  name: string
+}
+
+// Pull image attachments out of a user message's parts so we can render them
+// as inline thumbnails. The server echoes back uploaded files as parts with
+// kind "file" + raw.mime/raw.url, but the user bubble only renders text by
+// default; without this, every uploaded image disappears once the optimistic
+// message is replaced by the server payload.
+function messageImageAttachments(message: OpenCodeMessage): MessageImageAttachment[] {
+  const out: MessageImageAttachment[] = []
+  message.parts.forEach((part, index) => {
+    if (part.kind !== "file") return
+    const raw = asRecord(part.raw)
+    const mime = stringValue(raw?.mime) ?? ""
+    const url = stringValue(raw?.url) ?? stringValue(part.file) ?? ""
+    if (!mime.startsWith("image/") || !url) return
+    const name = stringValue(raw?.filename) ?? stringValue(part.file) ?? "image"
+    out.push({
+      key: part.id ?? `${message.id}-image-${index}`,
+      url,
+      mime,
+      name,
+    })
+  })
+  return out
+}
+
+function messagePartsFromAttachments(messageId: string, attachments: PromptAttachment[]): MessagePart[] {
+  return attachments.map((attachment, index) => ({
+    id: `${messageId}-file-${index}`,
+    kind: "file",
+    file: attachment.name,
+    title: attachment.name,
+    raw: {
+      type: "file",
+      mime: attachment.mime,
+      url: attachment.url,
+      filename: attachment.name,
+    },
+  }))
+}
+
 function hasRenderableMessageContent(message: OpenCodeMessage) {
   if (message.text.trim()) return true
   return message.parts.some((part) => {
@@ -1176,6 +1222,8 @@ export function ThreadWorkspace({
   permissionMode,
   permissionOptions = [],
   error,
+  composerDraft,
+  setComposerDraft,
   onSend,
   onAbort,
   onPickWorkspace,
@@ -1193,7 +1241,9 @@ export function ThreadWorkspace({
   onQuestionReply,
   onQuestionReject,
 }: Props) {
-  const [draft, setDraft] = useState("")
+  const [localComposerDraft, setLocalComposerDraft] = useState("")
+  const draft = composerDraft ?? localComposerDraft
+  const setDraft = setComposerDraft ?? setLocalComposerDraft
   const [attachments, setAttachments] = useState<PromptAttachment[]>([])
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [replyingId, setReplyingId] = useState<string | null>(null)
@@ -1217,9 +1267,12 @@ export function ThreadWorkspace({
   const [interruptedSessionId, setInterruptedSessionId] = useState<string | null>(null)
   const [localThinkingSince, setLocalThinkingSince] = useState<number | null>(null)
   const [progressPinned, setProgressPinned] = useState(false)
+  const [activeTimelineId, setActiveTimelineId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const messageNodeRefs = useRef(new Map<string, HTMLDivElement>())
+  const stickyBottomRef = useRef(true)
   const fileSearchRequest = useRef(0)
   const effectiveWorkspaceDirectory = thread?.directory ?? workspace?.path ?? null
   // Outside-click dismissal for the popovers anchored to the chat surface.
@@ -1388,7 +1441,16 @@ export function ThreadWorkspace({
     () => shouldShowStandaloneThreadDiffSummary(orderedMessages, normalizedDiffs),
     [orderedMessages, normalizedDiffs],
   )
-  const standaloneDiffs = showStandaloneDiffSummary ? normalizedDiffs : []
+  const workspaceDiffFallbacks = useMemo(
+    () => (showStandaloneDiffSummary ? normalizedDiffs : []),
+    [showStandaloneDiffSummary, normalizedDiffs],
+  )
+  const latestUserTurnStartIndex = useMemo(() => latestUserTurnStart(orderedMessages), [orderedMessages])
+  const assistantDiffSummaryMessageId = useMemo(
+    () => latestAssistantDiffSummaryMessageId(orderedMessages, workspaceDiffFallbacks),
+    [orderedMessages, workspaceDiffFallbacks],
+  )
+  const standaloneDiffs = showStandaloneDiffSummary && !assistantDiffSummaryMessageId ? normalizedDiffs : []
   const selectedPermission = permissionOptions.find((item) => item.id === permissionMode)
   const running = Boolean(isRunning && thread && !thread.local)
   const submitting = isBusy && !running
@@ -1424,6 +1486,38 @@ export function ThreadWorkspace({
     },
     [orderedMessages, runningAssistantId],
   )
+  const timelineItems = useMemo(() => buildThreadTimelineItems(displayMessages), [displayMessages])
+  const setMessageNodeRef = useCallback((messageId: string, node: HTMLDivElement | null) => {
+    if (node) messageNodeRefs.current.set(messageId, node)
+    else messageNodeRefs.current.delete(messageId)
+  }, [])
+  const scrollToTimelineItem = useCallback((messageId: string) => {
+    const node = messageNodeRefs.current.get(messageId)
+    if (!node) return
+    stickyBottomRef.current = false
+    setActiveTimelineId(messageId)
+    node.scrollIntoView({ block: "start", behavior: "smooth" })
+  }, [])
+  const updateActiveTimelineItem = useCallback(() => {
+    if (!timelineItems.length) {
+      setActiveTimelineId(null)
+      return
+    }
+    const scroll = scrollRef.current
+    if (!scroll) {
+      setActiveTimelineId((current) => current ?? timelineItems[0]?.id ?? null)
+      return
+    }
+    const anchor = scroll.scrollTop + 140
+    let active = timelineItems[0]?.id ?? null
+    for (const item of timelineItems) {
+      const node = messageNodeRefs.current.get(item.id)
+      if (!node) continue
+      if (node.offsetTop <= anchor) active = item.id
+      else break
+    }
+    setActiveTimelineId(active)
+  }, [timelineItems])
   const compactionDividerTotal = useMemo(
     () => displayMessages.filter(isCompactionMessage).length,
     [displayMessages],
@@ -1574,22 +1668,21 @@ export function ThreadWorkspace({
     setProgressPinned(false)
   }, [thread?.id, thread?.local])
 
-  // Track whether the user is "pinned" to the bottom of the scroll area.
-  // We only auto-scroll while pinned — if they manually scroll up (to read an
-  // earlier message or copy code), incoming activities/messages won't yank
-  // the viewport back down.
-  const stickyBottomRef = useRef(true)
-
   useEffect(() => {
     const scroll = scrollRef.current
     if (!scroll) return
     const onScroll = () => {
       const distance = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight
       stickyBottomRef.current = distance < 80
+      updateActiveTimelineItem()
     }
     scroll.addEventListener("scroll", onScroll, { passive: true })
     return () => scroll.removeEventListener("scroll", onScroll)
-  }, [])
+  }, [updateActiveTimelineItem])
+
+  useEffect(() => {
+    updateActiveTimelineItem()
+  }, [updateActiveTimelineItem])
 
   // When the active thread changes, snap to bottom regardless of prior state.
   useEffect(() => {
@@ -1744,7 +1837,21 @@ export function ThreadWorkspace({
   async function submitDraft() {
     const text = draft.trim()
     if ((!text && !attachments.length) || submitting) return
-    const sentAttachments = attachments
+    let submission: ReturnType<typeof preparePromptSubmission>
+    try {
+      submission = preparePromptSubmission({
+        text,
+        attachments,
+        maxAttachments: MAX_ATTACHMENTS,
+        maxAttachmentBytes: MAX_ATTACHMENT_BYTES,
+      })
+    } catch (error) {
+      setAttachmentError(getErrorMessage(error) ?? "输入内容无法转为附件。")
+      return
+    }
+    const originalAttachments = attachments
+    const sentText = submission.text
+    const sentAttachments = submission.attachments
     setDraft("")
     setAttachments([])
     setAttachmentError(null)
@@ -1760,7 +1867,7 @@ export function ThreadWorkspace({
       const guideId = `guide-${Date.now()}-${Math.random().toString(36).slice(2)}`
       const guide: PendingGuide = {
         id: guideId,
-        text,
+        text: sentText,
         attachments: sentAttachments,
         createdAt: Date.now(),
         status: "staged",
@@ -1777,21 +1884,22 @@ export function ThreadWorkspace({
     const optimistic: OpenCodeMessage = {
       id: optimisticId,
       role: "user",
-      text,
+      text: sentText,
       createdAt: Date.now(),
       completedAt: Date.now(),
-      parts: [],
+      parts: messagePartsFromAttachments(optimisticId, sentAttachments),
       raw: { optimistic: true, attachments: sentAttachments.map((attachment) => attachment.name) },
     }
     setOptimisticMessages((current) => [...current, optimistic])
     setLocalThinkingSince(Date.now())
 
     try {
-      await onSend(text, sentAttachments)
+      await onSend(sentText, sentAttachments)
     } catch (error) {
       setOptimisticMessages((current) => current.filter((message) => message.id !== optimisticId))
       setLocalThinkingSince(null)
       setDraft((current) => current || text)
+      setAttachments((current) => (current.length ? current : originalAttachments))
       setAttachmentError(getErrorMessage(error) ?? "发送失败。")
     }
   }
@@ -1835,6 +1943,26 @@ export function ThreadWorkspace({
   async function submitGuide(guide: PendingGuide, options?: { stopFirst?: boolean }) {
     if (guide.status === "sending") return
     setGuideMenuOpen(null)
+    let submission: ReturnType<typeof preparePromptSubmission>
+    try {
+      submission = preparePromptSubmission({
+        text: guide.text,
+        attachments: guide.attachments,
+        maxAttachments: MAX_ATTACHMENTS,
+        maxAttachmentBytes: MAX_ATTACHMENT_BYTES,
+      })
+    } catch (error) {
+      const message = getErrorMessage(error) ?? "输入内容无法转为附件。"
+      setPendingGuides((current) =>
+        current.map((item) =>
+          item.id === guide.id ? { ...item, status: "failed", error: message } : item,
+        ),
+      )
+      setAttachmentError(message)
+      return
+    }
+    const guideText = submission.text
+    const guideAttachments = submission.attachments
     setPendingGuides((current) =>
       current.map((item) =>
         item.id === guide.id ? { ...item, status: "sending", error: undefined } : item,
@@ -1846,11 +1974,11 @@ export function ThreadWorkspace({
     const optimistic: OpenCodeMessage = {
       id: optimisticId,
       role: "user",
-      text: guide.text,
+      text: guideText,
       createdAt: Date.now(),
       completedAt: Date.now(),
-      parts: [],
-      raw: { optimistic: true, attachments: guide.attachments.map((attachment) => attachment.name) },
+      parts: messagePartsFromAttachments(optimisticId, guideAttachments),
+      raw: { optimistic: true, attachments: guideAttachments.map((attachment) => attachment.name) },
     }
     setOptimisticMessages((current) => [...current, optimistic])
 
@@ -1859,10 +1987,14 @@ export function ThreadWorkspace({
         await abortCurrentTurn()
         setInterruptedSessionId(null)
       }
-      await onSend(guide.text, guide.attachments)
+      await onSend(guideText, guideAttachments)
       setLocalThinkingSince(Date.now())
       setPendingGuides((current) =>
-        current.map((item) => (item.id === guide.id ? { ...item, status: "submitted" } : item)),
+        current.map((item) =>
+          item.id === guide.id
+            ? { ...item, text: guideText, attachments: guideAttachments, status: "submitted" }
+            : item,
+        ),
       )
     } catch (error) {
       const message = getErrorMessage(error) ?? "重发失败。"
@@ -2057,8 +2189,9 @@ export function ThreadWorkspace({
         ) : null}
 
         <div className="relative min-h-0 flex-1">
+          <ConversationTimeline items={timelineItems} activeId={activeTimelineId} onSelect={scrollToTimelineItem} />
           <ScrollArea ref={scrollRef} className="h-full">
-            <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col px-6 pb-80 pt-6">
+            <div className="mx-auto flex min-h-full w-full max-w-[920px] flex-col px-6 pb-80 pt-6">
               {emptyState ? null : displayMessages.length ? (
                 <div className="flex flex-col">
                   {displayMessages.map((message, index) => {
@@ -2069,9 +2202,15 @@ export function ThreadWorkspace({
                     const isTurnStart = index > 0 && message.role === "user" && !isCompaction
                     const sourceIndex = orderedMessages.findIndex((item) => item.id === message.id)
                     const nextMessageId = sourceIndex >= 0 ? orderedMessages[sourceIndex + 1]?.id ?? null : null
+                    const turnFallbackDiffs =
+                      sourceIndex >= 0 && sourceIndex >= latestUserTurnStartIndex ? workspaceDiffFallbacks : []
                     const messageDiffs = sourceIndex >= 0
-                      ? turnDiffsForMessage(message, orderedMessages, sourceIndex, standaloneDiffs, effectiveWorkspaceDirectory)
-                      : standaloneDiffs
+                      ? turnDiffsForMessage(message, orderedMessages, sourceIndex, turnFallbackDiffs, effectiveWorkspaceDirectory)
+                      : turnFallbackDiffs
+                    const renderReviewCard =
+                      !turnFallbackDiffs.length ||
+                      !assistantDiffSummaryMessageId ||
+                      message.id === assistantDiffSummaryMessageId
                     const mergedRunBlocks = adjacentRunBlocks.mergedByMessageId[message.id]
                     const hiddenRunBlocks = adjacentRunBlocks.hiddenByMessageId[message.id]
                     const flow = message.role === "assistant" ? assistantFlowItems(message) : []
@@ -2090,6 +2229,7 @@ export function ThreadWorkspace({
                     return (
                       <div
                         key={message.id}
+                        ref={(node) => setMessageNodeRef(message.id, node)}
                         className={cn(
                           isTurnStart
                             ? "mt-10 border-t border-[var(--app-divider)] pt-10"
@@ -2108,6 +2248,7 @@ export function ThreadWorkspace({
                           mergedRunBlocks={mergedRunBlocks}
                           hiddenRunBlocks={hiddenRunBlocks}
                           diffs={messageDiffs}
+                          renderReviewCard={renderReviewCard}
                           serverBaseUrl={server?.baseUrl ?? null}
                           workspaceDirectory={effectiveWorkspaceDirectory}
                           onLocalFileOpen={openLocalFileInPanel}
@@ -2529,12 +2670,14 @@ function SideWorkspacePanel({
       onContextMenu={panel.type === "file" ? openMenu : undefined}
     >
       <div className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--app-divider)] px-4">
-        <Icon className="h-4 w-4 shrink-0 text-[var(--app-muted)]" />
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[color-mix(in_srgb,var(--app-text)_5%,transparent)] text-[var(--app-muted)]">
+          <Icon className="h-4 w-4" />
+        </div>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] font-semibold tracking-wide text-[var(--app-text)]">
+          <div className="truncate text-[13px] font-semibold leading-tight tracking-tight text-[var(--app-text)]">
             {title}
           </div>
-          <div className="mt-0.5 truncate text-[11px] text-[var(--app-muted)]" title={subtitle}>
+          <div className="mt-1 truncate text-[11px] leading-tight text-[var(--app-muted)]" title={subtitle}>
             {subtitle}
           </div>
         </div>
@@ -3165,9 +3308,19 @@ function ReviewDiffTable({
       {rows.map((row) => {
         if (row.kind === "fold") {
           return (
-            <div key={row.id} className="px-3 py-1.5">
-              <div className="rounded-md bg-[var(--app-hover-strong)] px-3 py-1.5 text-[13px] text-[var(--app-muted)]">
-                {row.count} 行未修改
+            <div
+              key={row.id}
+              className="grid min-h-6 grid-cols-[54px_22px_minmax(0,1fr)] border-y border-dashed border-[var(--app-divider)] bg-[color-mix(in_srgb,var(--app-text)_2%,transparent)] first:border-t-0 last:border-b-0"
+            >
+              <div className="select-none border-r border-dashed border-[var(--app-divider)] px-2 py-0.5 text-center text-[11px] leading-6 tracking-widest text-[var(--app-subtle)]">
+                ⋯
+              </div>
+              <div className="select-none px-2 py-0.5 text-center text-[11px] leading-6 text-[var(--app-subtle)]">
+                ⋯
+              </div>
+              <div className="flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-medium leading-6 tracking-wide text-[var(--app-subtle)]">
+                <ChevronDownIcon className="h-3 w-3 opacity-60" />
+                <span className="tabular-nums">{row.count} 行未修改</span>
               </div>
             </div>
           )
@@ -3397,26 +3550,28 @@ function CodeReviewPreviewBody({
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-[var(--app-bg)]">
-      <div className="shrink-0 border-b border-[var(--app-divider)] px-4 py-3">
+      <div className="shrink-0 border-b border-[var(--app-divider)] px-4 py-2.5">
         <div className="flex items-center justify-between gap-3">
           <button
             type="button"
-            className="flex min-w-0 items-center gap-1.5 text-left text-sm font-semibold text-[var(--app-muted)] hover:text-[var(--app-text)]"
+            className="-mx-1.5 flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[13px] font-medium text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
             onClick={() => setView("changes")}
           >
+            <GitBranchIcon className="h-3.5 w-3.5 shrink-0 opacity-70" />
             <span className="truncate">上一轮对话</span>
-            <ChevronDownIcon className="h-3.5 w-3.5 shrink-0" />
+            <ChevronDownIcon className="h-3.5 w-3.5 shrink-0 opacity-60" />
           </button>
-          <div className="flex shrink-0 items-center gap-3">
-            <div className="flex items-center gap-2 text-sm font-medium">
+          <div className="flex shrink-0 items-center gap-1">
+            <div className="mr-1 flex items-center gap-2 rounded-full border border-[var(--app-divider)] bg-[color-mix(in_srgb,var(--app-text)_3%,transparent)] px-2.5 py-0.5 text-[11px] font-semibold tabular-nums leading-5">
               <span className="text-[var(--app-success)]">+{totalAdditions}</span>
-              <span className="text-[var(--app-danger)]">-{totalDeletions}</span>
+              <span className="h-2.5 w-px bg-[var(--app-divider)]" />
+              <span className="text-[var(--app-danger)]">−{totalDeletions}</span>
             </div>
             <div ref={menuRef} className="relative">
               <button
                 type="button"
                 className={cn(
-                  "flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
+                  "flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
                   menuOpen && "bg-[var(--app-selected)] text-[var(--app-text)]",
                 )}
                 title="审查选项"
@@ -3438,10 +3593,11 @@ function CodeReviewPreviewBody({
                 </div>
               ) : null}
             </div>
+            <span className="mx-0.5 h-4 w-px bg-[var(--app-divider)]" />
             <button
               type="button"
               className={cn(
-                "flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
+                "flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
                 wordDiff && "bg-[var(--app-selected)] text-[var(--app-text)]",
               )}
               title="文字差异"
@@ -3452,7 +3608,7 @@ function CodeReviewPreviewBody({
             <button
               type="button"
               className={cn(
-                "flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
+                "flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
                 view === "file" && "bg-[var(--app-selected)] text-[var(--app-text)]",
               )}
               title="完整文件"
@@ -3477,13 +3633,31 @@ function CodeReviewPreviewBody({
         <div className="min-h-0 min-w-0 flex-1 overflow-auto px-4 py-4">
         {view === "changes" ? (
           <div className="space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0 truncate text-sm font-semibold text-[var(--app-text)]" title={filePath}>
-                {diff.file}
+            <div className="flex items-center justify-between gap-2 rounded-md border border-[var(--app-divider)] bg-[color-mix(in_srgb,var(--app-text)_2.5%,transparent)] px-2.5 py-1.5">
+              <div className="flex min-w-0 items-center gap-1.5 [font-family:var(--app-code-font)]" title={filePath}>
+                <FolderOpenIcon className="h-3.5 w-3.5 shrink-0 text-[var(--app-subtle)]" />
+                {(() => {
+                  const parts = diff.file.split(/[\\/]/).filter(Boolean)
+                  const name = parts.pop() ?? diff.file
+                  const dir = parts.join("/")
+                  return (
+                    <>
+                      {dir ? (
+                        <span className="min-w-0 truncate text-[11px] text-[var(--app-subtle)]">
+                          {dir}
+                          <span className="px-0.5 opacity-50">/</span>
+                        </span>
+                      ) : null}
+                      <span className="shrink-0 truncate text-[12.5px] font-semibold text-[var(--app-text)]">
+                        {name}
+                      </span>
+                    </>
+                  )
+                })()}
               </div>
               <button
                 type="button"
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
                 title={collapseContext ? "展开全部差异" : "折叠全部差异"}
                 onClick={() => setCollapseContext((value) => !value)}
               >
@@ -3828,6 +4002,81 @@ function InlineDiffPreview({ diff, onOpenDiff }: { diff: SessionDiffFile; onOpen
           在右侧审核完整文件
         </button>
       </div>
+    </div>
+  )
+}
+
+function ConversationTimeline({
+  items,
+  activeId,
+  onSelect,
+}: {
+  items: ThreadTimelineItem[]
+  activeId?: string | null
+  onSelect: (id: string) => void
+}) {
+  const [preview, setPreview] = useState<{ item: ThreadTimelineItem; x: number; y: number } | null>(null)
+  if (!items.length) return null
+
+  function showPreview(item: ThreadTimelineItem, element: HTMLElement) {
+    const rect = element.getBoundingClientRect()
+    const maxTop = Math.max(72, window.innerHeight - 156)
+    setPreview({
+      item,
+      x: rect.right + 10,
+      y: Math.min(Math.max(64, rect.top - 16), maxTop),
+    })
+  }
+
+  return (
+    <div className="pointer-events-none absolute bottom-44 left-4 top-8 z-20 hidden w-8 xl:block">
+      <div className="relative h-full w-full">
+        <div className="absolute bottom-4 left-1/2 top-4 w-px -translate-x-1/2 bg-[color-mix(in_srgb,var(--app-border)_52%,transparent)]" />
+        {items.map((item, index) => {
+          const active = item.id === activeId || (!activeId && index === 0)
+          const top = items.length <= 1 ? 4 : 4 + (index / (items.length - 1)) * 92
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className="group/timeline pointer-events-auto absolute left-1/2 flex h-7 w-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full outline-none"
+              style={{ top: `${top}%` }}
+              title={`${item.label}: ${item.preview}`}
+              aria-label={`${item.label}: ${item.preview}`}
+              onClick={() => onSelect(item.id)}
+              onFocus={(event) => showPreview(item, event.currentTarget)}
+              onBlur={() => setPreview(null)}
+              onMouseEnter={(event) => showPreview(item, event.currentTarget)}
+              onMouseLeave={() => setPreview(null)}
+            >
+              <span
+                className={cn(
+                  "block h-3.5 w-3.5 rounded-full border-[3px] bg-[var(--app-bg)] transition-[border-color,box-shadow,transform] duration-150 group-hover/timeline:scale-110 group-focus-visible/timeline:scale-110",
+                  active
+                    ? "border-[var(--app-accent)] shadow-[0_0_0_6px_color-mix(in_srgb,var(--app-accent)_14%,transparent),0_8px_24px_color-mix(in_srgb,var(--app-accent)_22%,transparent)]"
+                    : "border-[color-mix(in_srgb,var(--app-muted)_42%,var(--app-bg))] group-hover/timeline:border-[color-mix(in_srgb,var(--app-accent)_72%,var(--app-muted))] group-focus-visible/timeline:border-[color-mix(in_srgb,var(--app-accent)_72%,var(--app-muted))]",
+                )}
+              />
+            </button>
+          )
+        })}
+      </div>
+      {preview ? (
+        <div
+          className="pointer-events-none fixed z-50 w-72 rounded-md border border-[var(--app-border)] bg-[var(--app-panel)] px-3 py-2 text-left shadow-[var(--app-elevation-2)]"
+          style={{ left: preview.x, top: preview.y }}
+        >
+          <div className="flex items-center justify-between gap-3 text-[11px] font-semibold text-[var(--app-subtle)]">
+            <span>{preview.item.label}</span>
+            {preview.item.createdAt ? (
+              <span className="tabular-nums">{formatClockTime(preview.item.createdAt)}</span>
+            ) : null}
+          </div>
+          <div className="mt-1 max-h-20 overflow-hidden text-[12.5px] leading-5 text-[var(--app-text)]">
+            {preview.item.preview}
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -5215,6 +5464,40 @@ function diffSummaryDiffsForText(text: string, diffs: SessionDiffFile[]) {
   return []
 }
 
+function textCanRenderDiffSummary(text: string, diffs: SessionDiffFile[]) {
+  if (parseAssistantFileChangeNotice(text)) return false
+  if (diffSummaryDiffsForText(text, diffs).length) return true
+  return looksLikeCodeReviewSummary(text) && fileReferencesFromText(text).length > 0
+}
+
+function assistantDiffSummaryFlowIndex(flow: AssistantFlowItem[], diffs: SessionDiffFile[]) {
+  for (let index = flow.length - 1; index >= 0; index -= 1) {
+    const item = flow[index]
+    if (item?.type === "text" && textCanRenderDiffSummary(item.text, diffs)) return index
+  }
+  return -1
+}
+
+function latestUserTurnStart(messages: OpenCodeMessage[]) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === "user") {
+      return index
+    }
+  }
+  return 0
+}
+
+function latestAssistantDiffSummaryMessageId(messages: OpenCodeMessage[], diffs: SessionDiffFile[]) {
+  if (!diffs.length) return null
+  const turnStart = latestUserTurnStart(messages)
+  for (let index = messages.length - 1; index >= turnStart; index -= 1) {
+    const message = messages[index]
+    if (!message || message.role !== "assistant") continue
+    if (assistantDiffSummaryFlowIndex(assistantFlowItems(message), diffs) >= 0) return message.id
+  }
+  return null
+}
+
 function stripDiffReferenceLines(text: string, diffs: SessionDiffFile[]) {
   const lines = text.split(/\r?\n/)
   const remove = new Set<number>()
@@ -5464,6 +5747,7 @@ function AssistantFileChangeCard({
 function AssistantTextContent({
   text,
   diffs,
+  renderReviewCard = true,
   serverBaseUrl,
   workspaceDirectory,
   onLocalFileOpen,
@@ -5474,6 +5758,7 @@ function AssistantTextContent({
 }: {
   text: string
   diffs: SessionDiffFile[]
+  renderReviewCard?: boolean
   serverBaseUrl?: string | null
   workspaceDirectory?: string | null
   onLocalFileOpen?: (path: string) => void
@@ -5483,7 +5768,7 @@ function AssistantTextContent({
   onReviewOpen?: (diffs: SessionDiffFile[], selectedDiff?: SessionDiffFile | null) => void
 }) {
   const notice = parseAssistantFileChangeNotice(text)
-  const summaryDiffs = !notice ? diffSummaryDiffsForText(text, diffs) : []
+  const summaryDiffs = renderReviewCard && !notice ? diffSummaryDiffsForText(text, diffs) : []
   if (summaryDiffs.length) {
     const remainingText = stripDiffReferenceLines(text, summaryDiffs)
     return (
@@ -5506,7 +5791,7 @@ function AssistantTextContent({
     )
   }
 
-  const referencedFiles = !notice && looksLikeCodeReviewSummary(text) ? fileReferencesFromText(text) : []
+  const referencedFiles = renderReviewCard && !notice && looksLikeCodeReviewSummary(text) ? fileReferencesFromText(text) : []
   if (referencedFiles.length) {
     const remainingText = stripFileReferenceLines(text, referencedFiles)
     return (
@@ -5571,6 +5856,7 @@ function ThreadMessageBlock({
   mergedRunBlocks,
   hiddenRunBlocks,
   diffs = [],
+  renderReviewCard = true,
   showActions,
   serverBaseUrl,
   workspaceDirectory,
@@ -5592,6 +5878,7 @@ function ThreadMessageBlock({
   mergedRunBlocks?: Record<number, RunBlockGroup>
   hiddenRunBlocks?: Record<number, true>
   diffs?: SessionDiffFile[]
+  renderReviewCard?: boolean
   showActions?: boolean
   serverBaseUrl?: string | null
   workspaceDirectory?: string | null
@@ -5605,10 +5892,21 @@ function ThreadMessageBlock({
   onForkMessage?: (message: OpenCodeMessage, text?: string, boundaryMessageId?: string | null) => Promise<unknown>
 }) {
   const visibleParts = message.parts.filter(isRunnablePart)
+  const userImages = message.role === "user" ? messageImageAttachments(message) : []
+  const visibleNonImageParts =
+    message.role === "user"
+      ? visibleParts.filter((part) => {
+          if (part.kind !== "file") return true
+          const raw = asRecord(part.raw)
+          return !stringValue(raw?.mime)?.startsWith("image/")
+        })
+      : visibleParts
+  const [imagePreview, setImagePreview] = useState<MessageImageAttachment | null>(null)
   const flow = message.role === "assistant" ? assistantFlowItems(message) : []
   const hasVisibleFlow = flow.some((item, index) => item.type === "text" || !hiddenRunBlocks?.[index])
   const activeFlowPartIndex = lastPartFlowIndex(flow)
   const actionFlowIndex = lastTextFlowIndex(flow)
+  const diffSummaryFlowIndex = renderReviewCard ? assistantDiffSummaryFlowIndex(flow, diffs) : -1
   const visibleFlowText = flow
     .filter((item): item is Extract<AssistantFlowItem, { type: "text" }> => item.type === "text")
     .map((item) => item.text)
@@ -5733,9 +6031,12 @@ function ThreadMessageBlock({
             </button>
           </div>
         </div>
-      ) : isUser && text ? (
-        <div className={cn("flex w-full max-w-full flex-col gap-1", isUser ? "items-end" : "items-start self-stretch")}>
-          <CollapsiblePlainText text={text} />
+      ) : isUser && (text || userImages.length) ? (
+        <div className={cn("flex w-full max-w-full flex-col gap-1.5", isUser ? "items-end" : "items-start self-stretch")}>
+          {userImages.length ? (
+            <UserImageGrid images={userImages} onPreview={setImagePreview} />
+          ) : null}
+          {text ? <CollapsiblePlainText text={text} /> : null}
           {renderActions()}
         </div>
       ) : !isUser && hasVisibleFlow ? (
@@ -5747,6 +6048,7 @@ function ThreadMessageBlock({
                   <AssistantTextContent
                     text={item.text}
                     diffs={diffs}
+                    renderReviewCard={index === diffSummaryFlowIndex}
                     serverBaseUrl={serverBaseUrl}
                     workspaceDirectory={workspaceDirectory}
                     onLocalFileOpen={onLocalFileOpen}
@@ -5774,10 +6076,55 @@ function ThreadMessageBlock({
         </div>
       ) : showPendingAssistant ? (
         <ThinkingPlaceholder />
-      ) : visibleParts.length && isUser ? (
-        <PartRunGroup parts={visibleParts} running={false} message={message} onTerminalOpen={onTerminalOpen} />
+      ) : visibleNonImageParts.length && isUser ? (
+        <PartRunGroup parts={visibleNonImageParts} running={false} message={message} onTerminalOpen={onTerminalOpen} />
+      ) : null}
+      {imagePreview ? (
+        <ImagePreview
+          attachment={{
+            id: imagePreview.key,
+            name: imagePreview.name,
+            size: 0,
+            mime: imagePreview.mime,
+            url: imagePreview.url,
+          }}
+          onClose={() => setImagePreview(null)}
+        />
       ) : null}
     </section>
+  )
+}
+
+function UserImageGrid({
+  images,
+  onPreview,
+}: {
+  images: MessageImageAttachment[]
+  onPreview: (image: MessageImageAttachment) => void
+}) {
+  return (
+    <div className="flex max-w-[80%] flex-wrap justify-end gap-2">
+      {images.map((image) => (
+        <button
+          key={image.key}
+          type="button"
+          className="group/img relative overflow-hidden rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-[var(--app-panel-2)] shadow-[var(--app-elevation-1)] transition-[transform,border-color] duration-150 hover:-translate-y-px hover:border-[color-mix(in_srgb,var(--app-accent)_45%,var(--app-border))]"
+          onClick={() => onPreview(image)}
+          title={image.name}
+        >
+          <img
+            src={image.url}
+            alt={image.name}
+            className="block max-h-[220px] max-w-[260px] object-cover"
+            loading="lazy"
+            draggable={false}
+          />
+          <span className="pointer-events-none absolute inset-x-0 bottom-0 flex translate-y-full items-center gap-1 bg-gradient-to-t from-black/65 to-transparent px-2 py-1.5 text-[11px] font-medium text-white transition-transform duration-150 group-hover/img:translate-y-0">
+            <span className="truncate">{image.name}</span>
+          </span>
+        </button>
+      ))}
+    </div>
   )
 }
 

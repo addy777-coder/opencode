@@ -1280,7 +1280,7 @@ export function SettingsWorkspace({
 
   return (
     <div className="flex h-full min-w-0 bg-[var(--app-bg)] text-[var(--app-text)]">
-      <aside className="relative flex w-[244px] shrink-0 flex-col border-r border-[var(--app-border)] bg-[var(--app-panel)] before:pointer-events-none before:absolute before:inset-y-0 before:right-[-1px] before:w-px before:bg-gradient-to-b before:from-transparent before:via-[color-mix(in_srgb,var(--app-text)_6%,transparent)] before:to-transparent">
+      <aside className="relative flex w-[248px] shrink-0 flex-col border-r border-[var(--app-border)] bg-[var(--app-panel)] before:pointer-events-none before:absolute before:inset-y-0 before:right-[-1px] before:w-px before:bg-gradient-to-b before:from-transparent before:via-[color-mix(in_srgb,var(--app-text)_6%,transparent)] before:to-transparent">
         <div className="px-4 pb-3 pt-4">
           <div className="flex items-center gap-2 px-2 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-[var(--app-subtle)]">
             <SettingsIcon className="h-3.5 w-3.5 shrink-0" />

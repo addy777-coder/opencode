@@ -6,6 +6,7 @@ import {
   type ComponentType,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
+  type SetStateAction,
   type SVGProps,
 } from "react"
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -952,6 +953,7 @@ export function App() {
   const [projectSortMode, setProjectSortMode] = useState<ProjectSortMode>("recent")
   const [projectOrganizeOpen, setProjectOrganizeOpen] = useState(false)
   const [utilityPanel, setUtilityPanel] = useState<UtilityPanel | null>(null)
+  const [composerDrafts, setComposerDrafts] = useState<Record<string, string>>({})
   useEffect(() => {
     if (utilityPanel === "plugins") setUtilityPanel(null)
   }, [utilityPanel])
@@ -1183,10 +1185,33 @@ export function App() {
     activeRealThread?.directory ??
     workspace?.path ??
     null
+  const activeComposerDraftKey = activeThread
+    ? activeThread.local
+      ? `local:${workspace?.path ?? ""}`
+      : `session:${activeThread.id}`
+    : null
+  const activeComposerDraft = activeComposerDraftKey ? composerDrafts[activeComposerDraftKey] ?? "" : ""
   const activeActivities = useMemo(() => {
     if (!activeThread || activeThread.local) return []
     return liveActivities.filter((activity) => activity.sessionId === activeThread.id && isConversationActivity(activity))
   }, [activeThread, liveActivities])
+
+  function setActiveComposerDraft(action: SetStateAction<string>) {
+    if (!activeComposerDraftKey) return
+    const key = activeComposerDraftKey
+    setComposerDrafts((current) => {
+      const currentValue = current[key] ?? ""
+      const nextValue = typeof action === "function" ? action(currentValue) : action
+      if (!nextValue) {
+        if (!(key in current)) return current
+        const next = { ...current }
+        delete next[key]
+        return next
+      }
+      if (currentValue === nextValue) return current
+      return { ...current, [key]: nextValue }
+    })
+  }
 
   const pendingPermissions = useQuery({
     queryKey: syncQueryKeys.permissions(server?.baseUrl, activeSessionDirectory),
@@ -2922,19 +2947,19 @@ export function App() {
       data-theme={resolvedThemeMode(resolvedGuiSettings)}
     >
       <header
-        className="relative flex h-[48px] shrink-0 items-center border-b border-[var(--app-divider)] bg-[var(--app-chrome)] before:pointer-events-none before:absolute before:inset-x-0 before:bottom-[-1px] before:h-px before:bg-gradient-to-r before:from-transparent before:via-[color-mix(in_srgb,var(--app-text)_8%,transparent)] before:to-transparent"
+        className="relative flex h-10 shrink-0 items-center border-b border-[var(--app-divider)] bg-[var(--app-chrome)] before:pointer-events-none before:absolute before:inset-x-0 before:bottom-[-1px] before:h-px before:bg-gradient-to-r before:from-transparent before:via-[color-mix(in_srgb,var(--app-text)_8%,transparent)] before:to-transparent"
         onMouseDown={handleTitlebarMouseDown}
       >
         <div ref={titleMenuRegionRef} className="relative flex h-full min-w-0 flex-1 items-center gap-0.5 px-2">
           <button
-            className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
             title={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
             onClick={() => setSidebarCollapsed((value) => !value)}
           >
             {sidebarCollapsed ? <PanelLeftOpenIcon className="h-4 w-4" /> : <PanelLeftCloseIcon className="h-4 w-4" />}
           </button>
           <button
-            className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] disabled:opacity-30 disabled:hover:bg-transparent"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] disabled:opacity-30 disabled:hover:bg-transparent"
             title="返回"
             onClick={goBack}
             disabled={!previousView}
@@ -2942,19 +2967,19 @@ export function App() {
             <ChevronLeftIcon className="h-4 w-4" />
           </button>
           <button
-            className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] disabled:opacity-30 disabled:hover:bg-transparent"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] disabled:opacity-30 disabled:hover:bg-transparent"
             title="前进"
             onClick={goForward}
             disabled={!nextView}
           >
             <ChevronRightIcon className="h-4 w-4" />
           </button>
-          <nav className="ml-4 flex min-w-0 items-center gap-0.5 text-[13px] font-medium text-[var(--app-muted)]">
+          <nav className="ml-3 flex min-w-0 items-center gap-0.5 text-[12.5px] font-medium text-[var(--app-muted)]">
             {appMenus.map((menu) => (
               <button
                 key={menu.id}
                 className={cn(
-                  "h-8 whitespace-nowrap rounded-md px-2.5 leading-none transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
+                  "h-7 whitespace-nowrap rounded-md px-2.5 leading-none transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
                   openMenu === menu.id && "bg-[var(--app-selected)] text-[var(--app-text)]",
                 )}
                 onClick={() => setOpenMenu((value) => (value === menu.id ? null : menu.id))}
@@ -2988,23 +3013,23 @@ export function App() {
             />
           ) : null}
         </div>
-        <div className="flex shrink-0 items-center justify-end px-1.5">
+        <div className="flex shrink-0 items-center justify-end px-1">
           <button
-            className="flex h-8 w-11 items-center justify-center rounded-md text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+            className="flex h-7 w-10 items-center justify-center rounded-md text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
             title="最小化"
             onClick={() => void windowMinimize()}
           >
             <MinusIcon className="h-4 w-4" />
           </button>
           <button
-            className="flex h-8 w-11 items-center justify-center rounded-md text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+            className="flex h-7 w-10 items-center justify-center rounded-md text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
             title="最大化"
             onClick={() => void windowToggleMaximize()}
           >
             <Maximize2Icon className="h-3.5 w-3.5" />
           </button>
           <button
-            className="ml-px flex h-8 w-11 items-center justify-center rounded-md text-[var(--app-muted)] transition-colors hover:bg-[var(--app-danger)] hover:text-white"
+            className="ml-px flex h-7 w-10 items-center justify-center rounded-md text-[var(--app-muted)] transition-colors hover:bg-[var(--app-danger)] hover:text-white"
             title="关闭"
             onClick={() => void windowClose()}
           >
@@ -3039,7 +3064,7 @@ export function App() {
       ) : (
       <div className="flex min-h-0 flex-1">
         {!sidebarCollapsed ? (
-        <aside className="relative flex w-[264px] shrink-0 flex-col border-r border-[var(--app-border)] bg-[var(--app-panel)] before:pointer-events-none before:absolute before:inset-y-0 before:right-[-1px] before:w-px before:bg-gradient-to-b before:from-transparent before:via-[color-mix(in_srgb,var(--app-text)_6%,transparent)] before:to-transparent">
+        <aside className="relative flex w-[248px] shrink-0 flex-col border-r border-[var(--app-border)] bg-[var(--app-panel)] before:pointer-events-none before:absolute before:inset-y-0 before:right-[-1px] before:w-px before:bg-gradient-to-b before:from-transparent before:via-[color-mix(in_srgb,var(--app-text)_6%,transparent)] before:to-transparent">
           <div className="space-y-0.5 px-2.5 pb-1 pt-3">
             {primaryNav.map((item) => {
               const Icon = item.icon
@@ -3284,6 +3309,8 @@ export function App() {
               permissionMode={activePermissionMode}
               permissionOptions={permissionOptions}
               error={workbenchError}
+              composerDraft={activeComposerDraft}
+              setComposerDraft={setActiveComposerDraft}
               onSend={(text, attachments) => submitPrompt.mutateAsync({ text, attachments })}
               onAbort={() => abortThread.mutateAsync()}
               onPickWorkspace={() => pickWorkspaceForNewThread.mutate()}
