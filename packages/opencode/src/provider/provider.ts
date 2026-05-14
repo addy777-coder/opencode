@@ -1153,9 +1153,11 @@ const layer: Layer.Layer<
                 },
                 interleaved:
                   model.interleaved ??
-                  (apiNpm === "@ai-sdk/openai-compatible" && apiID.includes("deepseek")
-                    ? { field: "reasoning_content" }
-                    : false),
+                  iife(() => {
+                    if (apiNpm !== "@ai-sdk/openai-compatible") return false
+                    if (model.reasoning !== true && !apiID.toLowerCase().includes("deepseek")) return false
+                    return { field: "reasoning_content" as const }
+                  }),
               },
               cost: {
                 input: model?.cost?.input ?? 0,

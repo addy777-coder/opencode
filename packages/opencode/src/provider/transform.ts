@@ -294,9 +294,25 @@ function normalizeMessages(
   ) {
     const field = model.capabilities.interleaved.field
     return msgs.map((msg) => {
-      if (msg.role === "assistant" && Array.isArray(msg.content)) {
+      if (msg.role === "assistant") {
+        const existing = msg.providerOptions?.openaiCompatible?.[field]
+        if (typeof msg.content === "string") {
+          return {
+            ...msg,
+            content: msg.content ? [{ type: "text" as const, text: msg.content }] : [],
+            providerOptions: {
+              ...msg.providerOptions,
+              openaiCompatible: {
+                ...msg.providerOptions?.openaiCompatible,
+                [field]: typeof existing === "string" ? existing : "",
+              },
+            },
+          }
+        }
+
         const reasoningParts = msg.content.filter((part: any) => part.type === "reasoning")
         const reasoningText = reasoningParts.map((part: any) => part.text).join("")
+        const reasoningValue = reasoningText.length > 0 ? reasoningText : typeof existing === "string" ? existing : ""
 
         // Filter out reasoning parts from content
         const filteredContent = msg.content.filter((part: any) => part.type !== "reasoning")
@@ -311,7 +327,7 @@ function normalizeMessages(
             ...msg.providerOptions,
             openaiCompatible: {
               ...msg.providerOptions?.openaiCompatible,
-              [field]: reasoningText,
+              [field]: reasoningValue,
             },
           },
         }
