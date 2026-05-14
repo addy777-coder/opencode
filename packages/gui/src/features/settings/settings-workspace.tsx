@@ -4,7 +4,6 @@ import {
   useRef,
   useState,
   type ComponentType,
-  type CSSProperties,
   type ReactNode,
   type SVGProps,
 } from "react"
@@ -119,17 +118,20 @@ const WrenchIcon = Wrench as IconComponent
 
 export const GUI_SETTINGS_KEY = "guiSettings"
 export const DEFAULT_UI_FONT =
-  '"Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", "SF Pro Text", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", ui-sans-serif, system-ui, sans-serif'
+  '"Geist", "Inter Display", "IBM Plex Sans", "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", "SF Pro Text", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", ui-sans-serif, system-ui, sans-serif'
 export const DEFAULT_CODE_FONT =
-  '"Cascadia Code", "Cascadia Mono", "JetBrains Mono", "Maple Mono NF CN", "Sarasa Mono SC", ui-monospace, SFMono-Regular, Menlo, Consolas, "Microsoft YaHei UI", monospace'
+  '"Geist Mono", "JetBrains Mono", "IBM Plex Mono", "Cascadia Code", "Cascadia Mono", "Maple Mono NF CN", "Sarasa Mono SC", ui-monospace, SFMono-Regular, Menlo, Consolas, "Microsoft YaHei UI", monospace'
 
+// Refined editor-grade palette: cool-tinted blacks, soft electric-blue accent.
+// Light mode pairs warm off-white with a deeper, slightly desaturated blue so
+// both modes read as one design system, not two skinned variants.
 const CODEX_THEME = {
-  lightAccent: "#6f6f6f",
-  lightBackground: "#f7f7f5",
-  lightForeground: "#1f1f1f",
-  darkAccent: "#8f8f8f",
-  darkBackground: "#121212",
-  darkForeground: "#f7f7f5",
+  lightAccent: "#3b6ee0",
+  lightBackground: "#fafaf8",
+  lightForeground: "#161718",
+  darkAccent: "#7ab2ff",
+  darkBackground: "#0c0d10",
+  darkForeground: "#f3f5f8",
 }
 
 const LEGACY_BLUE_CODEX_THEME = {
@@ -403,11 +405,32 @@ const settingsNav: NavItem[] = [
   { id: "archived", label: "已归档对话", icon: Clock3Icon },
 ]
 
+type SettingsNavGroup = { label: string; items: SettingsTab[] }
+
+const settingsNavGroups: SettingsNavGroup[] = [
+  { label: "常规", items: ["general", "personalization", "statistics"] },
+  { label: "集成", items: ["thirdPartyApi", "models", "mcp", "git"] },
+  { label: "环境", items: ["networkProxy", "environment", "browser", "computer"] },
+  { label: "高级", items: ["configuration", "archived"] },
+]
+
+const settingsNavIndex: Record<SettingsTab, NavItem> = settingsNav.reduce(
+  (acc, item) => {
+    acc[item.id] = item
+    return acc
+  },
+  {} as Record<SettingsTab, NavItem>,
+)
+
+function settingsCategoryFor(tab: SettingsTab): string | null {
+  return settingsNavGroups.find((group) => group.items.includes(tab))?.label ?? null
+}
+
 const presetThemes = [
-  { id: "codex", label: "Codex（默认）", colors: ["#6f6f6f", "#f7f7f5", "#1f1f1f", "#121212"] },
+  { id: "codex", label: "Codex（默认）", colors: ["#3b6ee0", "#fafaf8", "#161718", "#0c0d10"] },
   { id: "claude", label: "Claude", colors: ["#cc7d5e", "#f9f9f7", "#2d2d2b", "#3b3b39"] },
   { id: "github", label: "GitHub", colors: ["#3b82f6", "#ffffff", "#24292f", "#0d1117"] },
-  { id: "custom", label: "自定义", colors: ["#8f8f8f", "#f7f7f5", "#1f1f1f", "#121212"] },
+  { id: "custom", label: "自定义", colors: ["#7ab2ff", "#fafaf8", "#161718", "#0c0d10"] },
 ] as const
 
 function presetPatch(preset: GuiSettings["presetTheme"]): Partial<GuiSettings> {
@@ -1072,52 +1095,8 @@ function mergeSettings(value?: Partial<GuiSettings> | null): GuiSettings {
   return normalizeGuiSettings(value)
 }
 
-function settingsResolvedTheme(settings: GuiSettings): "light" | "dark" {
-  const useLight =
-    settings.themeMode === "light" ||
-    (settings.themeMode === "system" &&
-      typeof window !== "undefined" &&
-      window.matchMedia?.("(prefers-color-scheme: light)").matches)
-  return useLight ? "light" : "dark"
-}
+// Settings inherits its themed tokens from <App>'s root themeVars; no override needed.
 
-function settingsThemeVars(settings: GuiSettings): CSSProperties {
-  const useLight = settingsResolvedTheme(settings) === "light"
-  const accent = useLight ? settings.lightAccent : settings.darkAccent
-  const background = useLight ? settings.lightBackground : settings.darkBackground
-  const foreground = useLight ? settings.lightForeground : settings.darkForeground
-  const muted = useLight ? "rgba(45,45,43,0.58)" : "rgba(249,249,247,0.52)"
-
-  return {
-    "--app-bg": background,
-    "--app-panel": useLight ? "#ffffff" : "#202020",
-    "--app-panel-2": useLight ? "#f3f2ef" : "#1f1f1f",
-    "--app-chrome": useLight ? "#f0efec" : "#202020",
-    "--app-input": useLight ? "#ffffff" : "#2d2d2d",
-    "--app-border": useLight ? "rgba(45,45,43,0.14)" : "rgba(255,255,255,0.08)",
-    "--app-divider": useLight ? "rgba(45,45,43,0.10)" : "rgba(255,255,255,0.06)",
-    "--app-text": foreground,
-    "--app-muted": muted,
-    "--app-subtle": useLight ? "rgba(45,45,43,0.42)" : "rgba(249,249,247,0.36)",
-    "--app-hover": useLight ? "rgba(45,45,43,0.08)" : "rgba(255,255,255,0.07)",
-    "--app-hover-strong": useLight ? "rgba(45,45,43,0.12)" : "rgba(255,255,255,0.12)",
-    "--app-selected": useLight ? "rgba(45,45,43,0.10)" : "rgba(255,255,255,0.10)",
-    "--app-accent": accent,
-    "--app-accent-soft": `color-mix(in srgb, ${accent} 16%, transparent)`,
-    "--app-accent-contrast": "#ffffff",
-    "--app-composer": useLight ? "#ffffff" : "#2b2b2b",
-    "--app-inspector": useLight ? "#f4f3f0" : "#171717",
-    "--app-code-bg": useLight ? "rgba(45,45,43,0.06)" : "rgba(0,0,0,0.30)",
-    "--app-dot": useLight ? "rgba(45,45,43,0.30)" : "rgba(249,249,247,0.28)",
-    "--app-success": "#34d399",
-    "--app-warning": "#f59e0b",
-    "--app-danger": "#ef4444",
-    "--app-danger-soft": "rgba(239,68,68,0.12)",
-    "--app-ui-font": useLight ? settings.lightUiFont : settings.darkUiFont,
-    "--app-code-font": useLight ? settings.lightCodeFont : settings.darkCodeFont,
-    fontFamily: useLight ? settings.lightUiFont : settings.darkUiFont,
-  } as CSSProperties
-}
 
 export function SettingsWorkspace({
   server,
@@ -1300,39 +1279,49 @@ export function SettingsWorkspace({
   ])
 
   return (
-    <div
-      className="flex h-full min-w-0 bg-[var(--app-bg)] text-[var(--app-text)]"
-      style={settingsThemeVars(settings)}
-      data-theme={settingsResolvedTheme(settings)}
-    >
-      <aside className="flex w-[260px] shrink-0 flex-col border-r border-[var(--app-divider)] bg-[var(--app-panel)]">
-        <div className="px-4 pb-2 pt-5">
-          <div className="flex items-center gap-2 px-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--app-subtle)]">
+    <div className="flex h-full min-w-0 bg-[var(--app-bg)] text-[var(--app-text)]">
+      <aside className="relative flex w-[244px] shrink-0 flex-col border-r border-[var(--app-border)] bg-[var(--app-panel)] before:pointer-events-none before:absolute before:inset-y-0 before:right-[-1px] before:w-px before:bg-gradient-to-b before:from-transparent before:via-[color-mix(in_srgb,var(--app-text)_6%,transparent)] before:to-transparent">
+        <div className="px-4 pb-3 pt-4">
+          <div className="flex items-center gap-2 px-2 text-[10.5px] font-semibold uppercase tracking-[0.14em] text-[var(--app-subtle)]">
             <SettingsIcon className="h-3.5 w-3.5 shrink-0" />
             <span className="min-w-0 flex-1 truncate">设置</span>
           </div>
         </div>
         <ScrollArea className="min-h-0 flex-1">
-          <nav className="space-y-0.5 px-2 pb-3">
-            {settingsNav.map((item) => {
-              const Icon = item.icon
-              const selected = activeTab === item.id
-              return (
-                <button
-                  key={item.id}
-                  className={cn(
-                    "flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-left text-[14px] font-medium transition-colors",
-                    selected
-                      ? "bg-[var(--app-selected)] text-[var(--app-text)]"
-                      : "text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
-                  )}
-                  onClick={() => setActiveTab(item.id)}
-                >
-                  <Icon className="h-4 w-4 shrink-0" />
-                  <span className="min-w-0 flex-1 truncate">{item.label}</span>
-                </button>
-              )
-            })}
+          <nav className="space-y-4 px-2 pb-4">
+            {settingsNavGroups.map((group) => (
+              <div key={group.label} className="space-y-0.5">
+                <div className="px-3 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--app-subtle)]">
+                  {group.label}
+                </div>
+                {group.items.map((id) => {
+                  const item = settingsNavIndex[id]
+                  if (!item) return null
+                  const Icon = item.icon
+                  const selected = activeTab === item.id
+                  return (
+                    <button
+                      key={item.id}
+                      className={cn(
+                        "relative flex h-9 w-full items-center gap-2.5 rounded-[var(--app-radius-md)] px-2.5 text-left text-[13px] font-medium transition-[background-color,color] duration-150",
+                        selected
+                          ? "bg-[var(--app-selected)] text-[var(--app-text)] before:absolute before:left-0 before:top-1/2 before:h-5 before:w-[2px] before:-translate-y-1/2 before:rounded-r-full before:bg-[var(--app-accent)] before:content-['']"
+                          : "text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
+                      )}
+                      onClick={() => setActiveTab(item.id)}
+                    >
+                      <Icon
+                        className={cn(
+                          "h-4 w-4 shrink-0",
+                          selected ? "text-[var(--app-accent)]" : undefined,
+                        )}
+                      />
+                      <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            ))}
           </nav>
         </ScrollArea>
       </aside>
@@ -1347,14 +1336,19 @@ export function SettingsWorkspace({
           >
             <div className="mb-8 flex items-start justify-between gap-5">
               <div className="min-w-0">
-                <h1 className="text-[24px] font-semibold tracking-tight text-[var(--app-text)]">
-                  {settingsNav.find((item) => item.id === activeTab)?.label ?? "常规"}
+                {settingsCategoryFor(activeTab) ? (
+                  <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-[var(--app-subtle)]">
+                    {settingsCategoryFor(activeTab)}
+                  </div>
+                ) : null}
+                <h1 className="text-[26px] font-semibold leading-[1.1] tracking-[-0.018em] text-[var(--app-text)]">
+                  {settingsNavIndex[activeTab]?.label ?? "常规"}
                 </h1>
               </div>
             </div>
 
             {errorMessage ? (
-              <div className="mb-5 rounded-lg border border-[color-mix(in_srgb,var(--app-danger)_45%,transparent)] bg-[var(--app-danger-soft)] px-4 py-3 text-sm leading-6 text-[var(--app-text)]">
+              <div className="mb-5 rounded-[var(--app-radius-md)] border border-[color-mix(in_srgb,var(--app-danger)_45%,transparent)] bg-[var(--app-danger-soft)] px-4 py-3 text-[13px] leading-6 text-[var(--app-text)] shadow-[var(--app-elevation-1)]">
                 {errorMessage}
               </div>
             ) : null}

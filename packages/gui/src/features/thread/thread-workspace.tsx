@@ -2173,11 +2173,14 @@ export function ThreadWorkspace({
           >
             <div className="pointer-events-auto w-full max-w-[920px]">
               {emptyState ? (
-                <div className="mb-7 text-center">
-                  <h2 className="text-[36px] font-semibold leading-tight tracking-normal text-[var(--app-text)]">
+                <div className="mb-8 text-center">
+                  <div className="mb-2 text-[11px] font-medium uppercase tracking-[0.22em] text-[var(--app-subtle)]">
+                    OpenCode
+                  </div>
+                  <h2 className="bg-[linear-gradient(180deg,var(--app-text)_0%,color-mix(in_srgb,var(--app-text)_70%,transparent)_100%)] bg-clip-text text-[40px] font-semibold leading-[1.05] tracking-[-0.022em] text-transparent">
                     我们该做什么？
                   </h2>
-                  <div className="mt-5 flex flex-wrap justify-center gap-2.5">
+                  <div className="mt-6 flex flex-wrap justify-center gap-2">
                     <GuideChip label="@ 引用文件" />
                     <GuideChip label="/ 使用命令" />
                     <GuideChip label="Esc 中断当前回合" />
@@ -2187,8 +2190,12 @@ export function ThreadWorkspace({
               <div
                 ref={composerRef}
                 className={cn(
-                  "relative rounded-[24px] border border-[var(--app-border)] bg-[var(--app-composer)] px-5 py-3.5 shadow-2xl shadow-black/10 transition-[border-color,background-color,box-shadow] focus-within:border-[color-mix(in_srgb,var(--app-text)_22%,transparent)] focus-within:shadow-[0_22px_48px_rgba(0,0,0,0.16)] sm:px-6 sm:py-4",
-                  dragOver && "border-[var(--app-accent)] bg-[var(--app-hover)]",
+                  "relative rounded-[22px] border border-[var(--app-border)] bg-[var(--app-composer)] px-5 py-3.5 transition-[border-color,background-color,box-shadow] duration-200 ease-out sm:px-6 sm:py-4",
+                  "shadow-[var(--app-elevation-2)]",
+                  "focus-within:border-[color-mix(in_srgb,var(--app-accent)_45%,var(--app-border))]",
+                  "focus-within:shadow-[var(--app-elevation-2),0_0_0_4px_var(--app-ring)]",
+                  dragOver &&
+                    "border-[var(--app-accent)] bg-[color-mix(in_srgb,var(--app-accent)_8%,var(--app-composer))] shadow-[var(--app-elevation-3),0_0_0_4px_var(--app-accent-soft)]",
                 )}
                 onDrop={handleDrop}
                 onDragOver={(event) => {
@@ -4027,7 +4034,7 @@ function GuideMenuButton({
 
 function GuideChip({ label }: { label: string }) {
   return (
-    <span className="rounded-full border border-[var(--app-border)] bg-[var(--app-panel-2)] px-3.5 py-1.5 text-xs font-medium text-[var(--app-muted)] shadow-sm shadow-black/5">
+    <span className="inline-flex items-center rounded-full border border-[var(--app-border)] bg-[var(--app-panel-2)] px-3.5 py-1.5 text-[12px] font-medium text-[var(--app-muted)] shadow-[0_1px_0_color-mix(in_srgb,var(--app-text)_4%,transparent)_inset,0_1px_1px_rgba(0,0,0,0.06)] transition-colors hover:border-[color-mix(in_srgb,var(--app-text)_16%,var(--app-border))] hover:text-[var(--app-text)]">
       {label}
     </span>
   )
@@ -4191,7 +4198,7 @@ function SuggestionPanel({
 }) {
   if (!open) return null
   return (
-    <div className="absolute bottom-full left-0 right-0 z-30 mb-1.5 max-h-60 overflow-auto rounded-xl border border-[var(--app-border)] bg-[var(--app-panel)] py-1 shadow-xl shadow-black/30 ring-1 ring-black/5">
+    <div className="absolute bottom-full left-0 right-0 z-30 mb-2 max-h-72 overflow-auto rounded-[var(--app-radius-lg)] border border-[var(--app-border)] bg-[var(--app-panel)] py-1.5 shadow-[var(--app-elevation-3)]">
       {items.length ? (
         items.map((item, index) => {
           const selected = index === activeIdx
@@ -4200,28 +4207,39 @@ function SuggestionPanel({
           return (
             <div key={item.key}>
               {showGroup ? (
-                <div className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-normal text-[var(--app-subtle)]">
+                <div className="px-3 pb-1 pt-2.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--app-subtle)]">
                   {item.group}
                 </div>
               ) : null}
               <button
                 type="button"
                 className={cn(
-                  "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors",
-                  selected ? "bg-[var(--app-selected)] text-[var(--app-text)]" : "text-[var(--app-muted)] hover:bg-[var(--app-hover)]",
+                  "relative flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] transition-[background-color,color] duration-100",
+                  selected
+                    ? "bg-[var(--app-selected)] text-[var(--app-text)] before:absolute before:left-0 before:top-1/2 before:h-4 before:w-[2px] before:-translate-y-1/2 before:rounded-r-full before:bg-[var(--app-accent)] before:content-['']"
+                    : "text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
                 )}
                 onMouseEnter={() => onHover(index)}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => onPick(index)}
               >
-                <span className="shrink-0 font-mono text-xs">{item.primary}</span>
-                {item.secondary ? <span className="min-w-0 truncate text-[11px] text-[var(--app-subtle)]">{item.secondary}</span> : null}
+                <span
+                  className={cn(
+                    "shrink-0 font-mono text-[12px] tracking-tight",
+                    selected ? "text-[var(--app-accent)]" : "text-[var(--app-text)]",
+                  )}
+                >
+                  {item.primary}
+                </span>
+                {item.secondary ? (
+                  <span className="min-w-0 truncate text-[11px] text-[var(--app-subtle)]">{item.secondary}</span>
+                ) : null}
               </button>
             </div>
           )
         })
       ) : (
-        <div className="px-3 py-2 text-xs font-medium text-[var(--app-muted)]">{emptyHint}</div>
+        <div className="px-3 py-2.5 text-[12.5px] font-medium text-[var(--app-muted)]">{emptyHint}</div>
       )}
     </div>
   )
@@ -4850,7 +4868,7 @@ function CollapsiblePlainText({ text }: { text: string }) {
 
   return (
     <div className="flex max-w-[80%] flex-col items-end">
-      <div className="min-w-fit max-w-full whitespace-pre-wrap break-words rounded-3xl bg-[var(--app-panel-2)] px-4 py-2.5 text-[length:var(--app-prose-font-size)] leading-[1.65] text-[var(--app-text)]">
+      <div className="min-w-fit max-w-full whitespace-pre-wrap break-words rounded-[18px] rounded-tr-md border border-[color-mix(in_srgb,var(--app-accent)_18%,var(--app-border))] bg-[color-mix(in_srgb,var(--app-accent)_5%,var(--app-panel-2))] px-4 py-2.5 text-[length:var(--app-prose-font-size)] leading-[1.65] text-[var(--app-text)] shadow-[var(--app-elevation-1)]">
         {display}
       </div>
       {collapsed ? (
@@ -5692,13 +5710,13 @@ function ThreadMessageBlock({
           <textarea
             value={editText}
             onChange={(event) => setEditText(event.target.value)}
-            className="min-h-[96px] w-full resize-y rounded-lg border border-[var(--app-border)] bg-[var(--app-input)] px-3 py-2 text-sm leading-6 text-[var(--app-text)] outline-none focus:border-[var(--app-text)]"
+            className="min-h-[96px] w-full resize-y rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-[var(--app-input)] px-3 py-2.5 text-sm leading-6 text-[var(--app-text)] outline-none transition-[border-color,box-shadow] duration-150 focus:border-[color-mix(in_srgb,var(--app-accent)_45%,var(--app-border))] focus:shadow-[0_0_0_4px_var(--app-ring)]"
             autoFocus
           />
           <div className="mt-2 flex justify-end gap-2">
             <button
               type="button"
-              className="h-8 rounded-md px-3 text-xs font-medium text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+              className="h-8 rounded-[var(--app-radius-sm)] px-3 text-xs font-medium text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
               onClick={() => setEditing(false)}
               disabled={Boolean(pendingAction)}
             >
@@ -5706,7 +5724,7 @@ function ThreadMessageBlock({
             </button>
             <button
               type="button"
-              className="h-8 rounded-md bg-[var(--app-text)] px-3 text-xs font-medium text-[var(--app-bg)] disabled:opacity-50"
+              className="h-8 rounded-[var(--app-radius-sm)] bg-[var(--app-accent)] px-3.5 text-xs font-semibold text-[var(--app-accent-contrast)] shadow-[0_1px_0_rgba(255,255,255,0.18)_inset,0_8px_22px_color-mix(in_srgb,var(--app-accent)_28%,transparent)] transition-[background-color,opacity] hover:bg-[var(--app-accent-hover)] disabled:opacity-50"
               onClick={() => void sendForkEdit()}
               disabled={Boolean(pendingAction) || !editText.trim()}
             >
@@ -5755,10 +5773,7 @@ function ThreadMessageBlock({
           })}
         </div>
       ) : showPendingAssistant ? (
-        <div className="flex items-center gap-2 text-sm font-medium text-[var(--app-muted)]">
-          <Loader2Icon className="h-4 w-4 animate-spin" />
-          <span>思考中...</span>
-        </div>
+        <ThinkingPlaceholder />
       ) : visibleParts.length && isUser ? (
         <PartRunGroup parts={visibleParts} running={false} message={message} onTerminalOpen={onTerminalOpen} />
       ) : null}
@@ -5783,7 +5798,7 @@ function MessageActionButton({
     <button
       type="button"
       className={cn(
-        "flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-subtle)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] disabled:opacity-45",
+        "flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-subtle)] transition-[background-color,color,transform] duration-150 ease-out hover:scale-[1.06] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] active:scale-95 disabled:scale-100 disabled:opacity-45 disabled:hover:bg-transparent",
         danger && "hover:bg-[var(--app-danger-soft)] hover:text-[var(--app-danger)]",
       )}
       title={title}
@@ -5797,9 +5812,12 @@ function MessageActionButton({
 
 function ThinkingPlaceholder() {
   return (
-    <div className="flex items-center gap-2 text-sm font-medium text-[var(--app-muted)]">
-      <Loader2Icon className="h-4 w-4 animate-spin" />
-      <span>思考中...</span>
+    <div className="inline-flex items-center gap-2 rounded-full border border-[var(--app-border)] bg-[var(--app-panel-2)] py-1.5 pl-2.5 pr-3.5 text-[12.5px] font-medium text-[var(--app-muted)] shadow-[var(--app-elevation-1)]">
+      <span className="relative flex h-2 w-2">
+        <span className="absolute inset-0 animate-ping rounded-full bg-[var(--app-accent)] opacity-60" />
+        <span className="relative inline-block h-2 w-2 rounded-full bg-[var(--app-accent)]" />
+      </span>
+      <span className="app-caret-pulse">思考中…</span>
     </div>
   )
 }
@@ -5853,20 +5871,23 @@ function PartRunGroup({
     <div className="w-full self-stretch">
       <button
         type="button"
-        className="inline-flex items-center gap-1.5 py-1.5 text-xs font-medium text-[var(--app-muted)] hover:text-[var(--app-text)]"
+        className="inline-flex items-center gap-1.5 rounded-[var(--app-radius-sm)] px-1 py-1.5 text-[12px] font-medium text-[var(--app-muted)] transition-colors hover:text-[var(--app-text)]"
         onClick={() => parts.length && setOpen((value) => !value)}
       >
         {running ? (
-          <Loader2Icon className="h-3 w-3 animate-spin" />
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inset-0 animate-ping rounded-full bg-[var(--app-accent)] opacity-60" />
+            <span className="relative inline-block h-2 w-2 rounded-full bg-[var(--app-accent)]" />
+          </span>
         ) : (
-          <ChevronDownIcon className={cn("h-3 w-3 transition-transform", open && "rotate-180")} />
+          <ChevronDownIcon className={cn("h-3 w-3 transition-transform duration-150", open && "rotate-180")} />
         )}
-        <span>{label}</span>
+        <span className={cn("tabular-nums", running && "text-[var(--app-text)]")}>{label}</span>
       </button>
       {parts.length ? (
-        <div className={cn("grid transition-[grid-template-rows] duration-200", open ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+        <div className={cn("grid transition-[grid-template-rows] duration-200 ease-out", open ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
           <div className="overflow-hidden">
-            <div className="ml-1 space-y-2 border-l-2 border-[var(--app-divider)] py-1.5 pl-3">
+            <div className="ml-1 space-y-2 border-l-2 border-[var(--app-divider)] py-1.5 pl-3.5">
               {parts.slice(0, 12).map((part) => (
                 <PartRow
                   key={part.id ?? `${part.kind}-${part.tool ?? part.file ?? part.title}`}
@@ -6385,19 +6406,22 @@ function ActivityRunGroup({
     <section className="self-stretch">
       <button
         type="button"
-        className="inline-flex items-center gap-1.5 py-1.5 text-xs font-medium text-[var(--app-muted)] hover:text-[var(--app-text)]"
+        className="inline-flex items-center gap-1.5 rounded-[var(--app-radius-sm)] px-1 py-1.5 text-[12px] font-medium text-[var(--app-muted)] transition-colors hover:text-[var(--app-text)]"
         onClick={() => activities.length && setOpen((value) => !value)}
       >
         {running ? (
-          <Loader2Icon className="h-3 w-3 animate-spin" />
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inset-0 animate-ping rounded-full bg-[var(--app-accent)] opacity-60" />
+            <span className="relative inline-block h-2 w-2 rounded-full bg-[var(--app-accent)]" />
+          </span>
         ) : (
-          <ChevronDownIcon className={cn("h-3 w-3 transition-transform", open && "rotate-180")} />
+          <ChevronDownIcon className={cn("h-3 w-3 transition-transform duration-150", open && "rotate-180")} />
         )}
-        <span>{label}</span>
+        <span className={cn("tabular-nums", running && "text-[var(--app-text)]")}>{label}</span>
       </button>
-      <div className={cn("grid transition-[grid-template-rows] duration-200", open ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+      <div className={cn("grid transition-[grid-template-rows] duration-200 ease-out", open ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
         <div className="overflow-hidden">
-          <div className="ml-1 space-y-2 border-l-2 border-[var(--app-divider)] py-1.5 pl-3">
+          <div className="ml-1 space-y-2 border-l-2 border-[var(--app-divider)] py-1.5 pl-3.5">
             {activities.map((activity, index) => (
               <ActivityRow
                 key={activity.id}
@@ -6430,27 +6454,31 @@ function ExpandableRow({
   const [open, setOpen] = useState(false)
   const hasBody = Boolean(children)
   return (
-    <div className="text-xs">
+    <div className="group/row text-xs">
       <div className="flex max-w-full items-center gap-1">
         <button
           type="button"
-          className="inline-flex min-w-0 flex-1 items-center gap-1.5 text-[var(--app-muted)] transition-colors hover:text-[var(--app-text)] disabled:cursor-default"
+          className="inline-flex min-w-0 flex-1 items-center gap-1.5 rounded-[var(--app-radius-sm)] px-1 py-0.5 text-[var(--app-muted)] transition-colors hover:text-[var(--app-text)] disabled:cursor-default"
           disabled={!hasBody}
           onClick={() => hasBody && setOpen((value) => !value)}
         >
           {hasBody ? (
-            <ChevronRightIcon className={cn("h-3 w-3 shrink-0 transition-transform", open && "rotate-90")} />
+            <ChevronRightIcon className={cn("h-3 w-3 shrink-0 transition-transform duration-150", open && "rotate-90")} />
           ) : (
             <span className="h-3 w-3 shrink-0" />
           )}
-          <Icon className="h-3.5 w-3.5 shrink-0" />
+          <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--app-subtle)] transition-colors group-hover/row:text-[var(--app-accent)]" />
           <span className="min-w-0 break-all text-left">{label}</span>
-          {meta ? <span className="shrink-0 text-[10px] text-[var(--app-subtle)]">· {meta}</span> : null}
+          {meta ? (
+            <span className="shrink-0 rounded-[4px] bg-[var(--app-hover)] px-1.5 py-px text-[10px] uppercase tracking-[0.04em] text-[var(--app-subtle)]">
+              {meta}
+            </span>
+          ) : null}
         </button>
         {onOpenPanel ? (
           <button
             type="button"
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[var(--app-subtle)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--app-radius-sm)] text-[var(--app-subtle)] opacity-0 transition-[opacity,background-color,color] duration-150 hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] group-hover/row:opacity-100 group-focus-within/row:opacity-100"
             title="在右侧打开"
             onClick={onOpenPanel}
           >
@@ -6459,7 +6487,7 @@ function ExpandableRow({
         ) : null}
       </div>
       {hasBody ? (
-        <div className={cn("grid transition-[grid-template-rows] duration-200", open ? "grid-rows-[1fr] pt-1.5" : "grid-rows-[0fr]")}>
+        <div className={cn("grid transition-[grid-template-rows] duration-200 ease-out", open ? "grid-rows-[1fr] pt-1.5" : "grid-rows-[0fr]")}>
           <div className="overflow-hidden">
             <div className="ml-5">{children}</div>
           </div>
@@ -6471,7 +6499,7 @@ function ExpandableRow({
 
 function CodeBlock({ children }: { children: ReactNode }) {
   return (
-    <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-[var(--app-divider)] bg-[var(--app-code-bg)] p-3 text-[12px] leading-5 text-[var(--app-text)] [font-family:var(--app-code-font)]">
+    <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-[var(--app-radius-md)] border border-[var(--app-divider)] bg-[var(--app-code-bg)] p-3 text-[12px] leading-[1.65] text-[var(--app-text)] shadow-[var(--app-elevation-1)] [font-family:var(--app-code-font)] [font-feature-settings:'cv11'_1,'ss01'_1]">
       {children}
     </pre>
   )

@@ -443,7 +443,7 @@ function SessionRow({
   return (
     <div
       className={cn(
-        "group group/session relative flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left text-[13px] font-medium transition-colors",
+        "group group/session relative flex h-8 w-full items-center gap-2 rounded-[var(--app-radius-sm)] px-2.5 text-left text-[13px] font-medium transition-[background-color,color] duration-150",
         selected
           ? "bg-[var(--app-selected)] text-[var(--app-text)]"
           : "text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
@@ -452,9 +452,11 @@ function SessionRow({
       onContextMenu={openContextMenu}
     >
       {thread.running ? (
-        <span className="absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-[var(--app-text)]" />
+        <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-[var(--app-accent)] shadow-[0_0_8px_color-mix(in_srgb,var(--app-accent)_55%,transparent)]" />
+      ) : selected ? (
+        <span className="absolute left-0 top-1/2 h-4 w-[2px] -translate-y-1/2 rounded-r-full bg-[var(--app-accent)]" />
       ) : thread.unread ? (
-        <span className="absolute left-1 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-[var(--app-text)]" />
+        <span className="absolute left-1 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-[var(--app-accent)]" />
       ) : null}
       <button
         type="button"
@@ -464,19 +466,19 @@ function SessionRow({
         title={thread.title}
       >
         {thread.running ? (
-          <Loader2Icon className="h-3.5 w-3.5 shrink-0 animate-spin text-[var(--app-text)]" />
+          <Loader2Icon className="h-3.5 w-3.5 shrink-0 animate-spin text-[var(--app-accent)]" />
         ) : thread.pinned ? (
-          <PinIcon className="h-3.5 w-3.5 shrink-0 text-[var(--app-text)]" />
+          <PinIcon className="h-3.5 w-3.5 shrink-0 text-[var(--app-accent)]" />
         ) : null}
         <span className={cn("min-w-0 flex-1 truncate", thread.unread && "font-semibold text-[var(--app-text)]")}>
           {thread.title}
         </span>
         {thread.running ? (
-          <span className="shrink-0 rounded-full border border-[var(--app-border)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--app-text)] transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
+          <span className="shrink-0 rounded-full bg-[var(--app-accent-soft)] px-2 py-0.5 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-[var(--app-accent)] transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
             处理中
           </span>
         ) : thread.archived ? (
-          <span className="shrink-0 rounded-full border border-[var(--app-border)] px-1.5 py-0.5 text-[11px] text-[var(--app-subtle)] transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
+          <span className="shrink-0 rounded-full border border-[var(--app-border)] px-1.5 py-0.5 text-[10.5px] uppercase tracking-[0.06em] text-[var(--app-subtle)] transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
             已归档
           </span>
         ) : thread.meta ? (
@@ -501,7 +503,7 @@ function SessionRow({
       ) : null}
       {contextMenu ? (
         <div
-          className="fixed z-[90] w-56 overflow-hidden rounded-lg border border-[var(--app-border)] bg-[var(--app-panel)] p-1.5 text-sm shadow-2xl shadow-black/35"
+          className="fixed z-[90] w-56 overflow-hidden rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-[var(--app-panel)] p-1.5 text-sm shadow-[var(--app-elevation-3)]"
           style={{ left: menuLeft, top: menuTop }}
           data-no-window-drag
           onClick={(event) => event.stopPropagation()}
@@ -855,21 +857,38 @@ function themeVars(settings?: Partial<GuiSettings> | null): CSSProperties {
   const accent = useLight ? merged.lightAccent : merged.darkAccent
   const background = useLight ? merged.lightBackground : merged.darkBackground
   const foreground = useLight ? merged.lightForeground : merged.darkForeground
-  const panel = useLight ? "#fbfaf8" : "#202020"
-  const panel2 = useLight ? "#efeeeb" : "#1f1f1f"
-  const chrome = useLight ? "#efeeeb" : "#202020"
-  const input = useLight ? "#ffffff" : "#2d2d2d"
-  const border = useLight ? "rgba(45,45,43,0.13)" : "rgba(255,255,255,0.08)"
-  const divider = useLight ? "rgba(45,45,43,0.09)" : "rgba(255,255,255,0.06)"
-  const muted = useLight ? "rgba(45,45,43,0.58)" : "rgba(249,249,247,0.52)"
-  const subtle = useLight ? "rgba(45,45,43,0.42)" : "rgba(249,249,247,0.36)"
-  const hover = useLight ? "rgba(45,45,43,0.07)" : "rgba(255,255,255,0.07)"
-  const hoverStrong = useLight ? "rgba(45,45,43,0.11)" : "rgba(255,255,255,0.12)"
-  const selected = useLight ? "rgba(45,45,43,0.105)" : "rgba(255,255,255,0.10)"
-  const composer = useLight ? "#ffffff" : "#2b2b2b"
-  const inspector = useLight ? "#f4f3f0" : "#171717"
-  const code = useLight ? "rgba(45,45,43,0.06)" : "rgba(0,0,0,0.30)"
-  const dot = useLight ? "rgba(45,45,43,0.30)" : "rgba(249,249,247,0.28)"
+  // Layered neutrals — every surface gets its own tinted value so the eye can
+  // separate sidebar / chrome / panel / input without harsh borders.
+  const panel = useLight ? "#f5f4f1" : "#13151a"
+  const panel2 = useLight ? "#ecebe7" : "#181a20"
+  const chrome = useLight ? "#f1f0ec" : "#0d0e12"
+  const input = useLight ? "#ffffff" : "#15171d"
+  const border = useLight ? "rgba(20,22,28,0.10)" : "rgba(255,255,255,0.07)"
+  const divider = useLight ? "rgba(20,22,28,0.06)" : "rgba(255,255,255,0.045)"
+  const muted = useLight ? "rgba(20,22,28,0.60)" : "rgba(244,246,250,0.58)"
+  const subtle = useLight ? "rgba(20,22,28,0.42)" : "rgba(244,246,250,0.38)"
+  const hover = useLight ? "rgba(20,22,28,0.05)" : "rgba(255,255,255,0.045)"
+  const hoverStrong = useLight ? "rgba(20,22,28,0.09)" : "rgba(255,255,255,0.085)"
+  // Tinted selection so the eye locks onto the active row.
+  const selected = useLight
+    ? `color-mix(in srgb, ${accent} 12%, transparent)`
+    : `color-mix(in srgb, ${accent} 16%, transparent)`
+  const composer = useLight ? "#ffffff" : "#11141a"
+  const inspector = useLight ? "#efeeea" : "#0f1116"
+  const code = useLight ? "rgba(20,22,28,0.05)" : "rgba(255,255,255,0.035)"
+  const dot = useLight ? "rgba(20,22,28,0.20)" : "rgba(244,246,250,0.16)"
+  const ringSoft = useLight
+    ? `color-mix(in srgb, ${accent} 18%, transparent)`
+    : `color-mix(in srgb, ${accent} 28%, transparent)`
+  const elevation1 = useLight
+    ? "0 1px 0 rgba(20,22,28,0.04) inset, 0 1px 2px rgba(20,22,28,0.05), 0 1px 1px rgba(20,22,28,0.03)"
+    : "0 1px 0 rgba(255,255,255,0.04) inset, 0 1px 2px rgba(0,0,0,0.45), 0 4px 16px rgba(0,0,0,0.25)"
+  const elevation2 = useLight
+    ? "0 2px 4px rgba(20,22,28,0.05), 0 12px 32px rgba(20,22,28,0.10)"
+    : "0 1px 0 rgba(255,255,255,0.04) inset, 0 12px 36px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.35)"
+  const elevation3 = useLight
+    ? "0 4px 12px rgba(20,22,28,0.08), 0 24px 60px rgba(20,22,28,0.14)"
+    : "0 1px 0 rgba(255,255,255,0.05) inset, 0 28px 64px rgba(0,0,0,0.55), 0 4px 10px rgba(0,0,0,0.45)"
   const uiFont = useLight ? merged.lightUiFont : merged.darkUiFont
   const codeFont = useLight ? merged.lightCodeFont : merged.darkCodeFont
   const fontSize = merged.fontSize
@@ -889,8 +908,10 @@ function themeVars(settings?: Partial<GuiSettings> | null): CSSProperties {
     "--app-hover-strong": hoverStrong,
     "--app-selected": selected,
     "--app-accent": accent,
-    "--app-accent-soft": `color-mix(in srgb, ${accent} 16%, transparent)`,
-    "--app-accent-contrast": "#ffffff",
+    "--app-accent-soft": `color-mix(in srgb, ${accent} 14%, transparent)`,
+    "--app-accent-hover": `color-mix(in srgb, ${accent} 88%, ${useLight ? "#000" : "#fff"})`,
+    "--app-accent-contrast": useLight ? "#ffffff" : "#0a0b0d",
+    "--app-ring": ringSoft,
     "--app-composer": composer,
     "--app-inspector": inspector,
     "--app-code-bg": code,
@@ -899,6 +920,13 @@ function themeVars(settings?: Partial<GuiSettings> | null): CSSProperties {
     "--app-warning": "#f59e0b",
     "--app-danger": "#ef4444",
     "--app-danger-soft": "rgba(239,68,68,0.12)",
+    "--app-elevation-1": elevation1,
+    "--app-elevation-2": elevation2,
+    "--app-elevation-3": elevation3,
+    "--app-radius-sm": "6px",
+    "--app-radius-md": "10px",
+    "--app-radius-lg": "14px",
+    "--app-radius-xl": "20px",
     "--app-ui-font": uiFont,
     "--app-code-font": codeFont,
     "--app-font-size": `${fontSize}px`,
@@ -1257,6 +1285,16 @@ export function App() {
       (model) => model.providerId === selectedModel?.providerId && model.id === selectedModel.modelId,
     ) ??
     null
+  const defaultSelectableModel = useMemo(
+    () =>
+      chooseSelectableModel({
+        models: selectableModels,
+        selectedModel: null,
+        defaultProviderId: activeThirdPartyProvider?.id ?? null,
+        defaultModelId: activeThirdPartyProvider?.defaultModel || activeThirdPartyProvider?.models[0] || null,
+      }),
+    [activeThirdPartyProvider, selectableModels],
+  )
   const currentModelProviderName =
     currentProviderModels[0]?.providerName ?? activeThirdPartyProvider?.name ?? currentModelProviderId
 
@@ -1702,6 +1740,7 @@ export function App() {
     onSuccess: (saved) => {
       if (!saved) return
       queryClient.setQueryData(["settings", CURRENT_WORKSPACE_KEY], saved)
+      resetSelectedModelToDefault()
       setActiveThreadId(LOCAL_THREAD_ID)
       setActiveView("workbench")
       setUtilityPanel(null)
@@ -1723,6 +1762,7 @@ export function App() {
     },
     onSuccess: (saved) => {
       queryClient.setQueryData(["settings", CURRENT_WORKSPACE_KEY], saved)
+      resetSelectedModelToDefault()
       setActiveThreadId(LOCAL_THREAD_ID)
       setActiveView("workbench")
       setUtilityPanel(null)
@@ -2111,6 +2151,16 @@ export function App() {
     if (selectedModel?.providerId === model.providerId && selectedModel.modelId === model.id) {
       setSelectedModel(null)
     }
+  }
+
+  function resetSelectedModelToDefault() {
+    setSelectedModel((current) => {
+      if (!defaultSelectableModel) return current ? null : current
+      if (current?.providerId === defaultSelectableModel.providerId && current.modelId === defaultSelectableModel.id) {
+        return current
+      }
+      return { providerId: defaultSelectableModel.providerId, modelId: defaultSelectableModel.id }
+    })
   }
 
   function guiRecordFromSession(
@@ -2762,6 +2812,7 @@ export function App() {
   }
 
   function startNewThread(target?: WorkspaceRecord) {
+    resetSelectedModelToDefault()
     if (!target) {
       setActiveThreadId(LOCAL_THREAD_ID)
       setActiveView("workbench")
@@ -2871,19 +2922,19 @@ export function App() {
       data-theme={resolvedThemeMode(resolvedGuiSettings)}
     >
       <header
-        className="flex h-[52px] shrink-0 items-center border-b border-[var(--app-divider)] bg-[var(--app-chrome)]"
+        className="relative flex h-[48px] shrink-0 items-center border-b border-[var(--app-divider)] bg-[var(--app-chrome)] before:pointer-events-none before:absolute before:inset-x-0 before:bottom-[-1px] before:h-px before:bg-gradient-to-r before:from-transparent before:via-[color-mix(in_srgb,var(--app-text)_8%,transparent)] before:to-transparent"
         onMouseDown={handleTitlebarMouseDown}
       >
-        <div ref={titleMenuRegionRef} className="relative flex h-full min-w-0 flex-1 items-center gap-1 px-2">
+        <div ref={titleMenuRegionRef} className="relative flex h-full min-w-0 flex-1 items-center gap-0.5 px-2">
           <button
-            className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+            className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
             title={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
             onClick={() => setSidebarCollapsed((value) => !value)}
           >
             {sidebarCollapsed ? <PanelLeftOpenIcon className="h-4 w-4" /> : <PanelLeftCloseIcon className="h-4 w-4" />}
           </button>
           <button
-            className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] disabled:opacity-30 disabled:hover:bg-transparent"
+            className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] disabled:opacity-30 disabled:hover:bg-transparent"
             title="返回"
             onClick={goBack}
             disabled={!previousView}
@@ -2891,19 +2942,19 @@ export function App() {
             <ChevronLeftIcon className="h-4 w-4" />
           </button>
           <button
-            className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] disabled:opacity-30 disabled:hover:bg-transparent"
+            className="flex h-8 w-8 items-center justify-center rounded-md text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] disabled:opacity-30 disabled:hover:bg-transparent"
             title="前进"
             onClick={goForward}
             disabled={!nextView}
           >
             <ChevronRightIcon className="h-4 w-4" />
           </button>
-          <nav className="ml-5 flex min-w-0 items-center gap-1 text-[13px] font-medium text-[var(--app-muted)]">
+          <nav className="ml-4 flex min-w-0 items-center gap-0.5 text-[13px] font-medium text-[var(--app-muted)]">
             {appMenus.map((menu) => (
               <button
                 key={menu.id}
                 className={cn(
-                  "h-8 whitespace-nowrap rounded-md px-3 leading-none hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
+                  "h-8 whitespace-nowrap rounded-md px-2.5 leading-none transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
                   openMenu === menu.id && "bg-[var(--app-selected)] text-[var(--app-text)]",
                 )}
                 onClick={() => setOpenMenu((value) => (value === menu.id ? null : menu.id))}
@@ -2937,23 +2988,23 @@ export function App() {
             />
           ) : null}
         </div>
-        <div className="flex shrink-0 items-center justify-end gap-1 px-2">
+        <div className="flex shrink-0 items-center justify-end px-1.5">
           <button
-            className="flex h-8 w-11 items-center justify-center rounded-md text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+            className="flex h-8 w-11 items-center justify-center rounded-md text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
             title="最小化"
             onClick={() => void windowMinimize()}
           >
             <MinusIcon className="h-4 w-4" />
           </button>
           <button
-            className="flex h-8 w-11 items-center justify-center rounded-md text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+            className="flex h-8 w-11 items-center justify-center rounded-md text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
             title="最大化"
             onClick={() => void windowToggleMaximize()}
           >
             <Maximize2Icon className="h-3.5 w-3.5" />
           </button>
           <button
-            className="flex h-8 w-11 items-center justify-center rounded-md text-[var(--app-muted)] hover:bg-[var(--app-danger)] hover:text-white"
+            className="ml-px flex h-8 w-11 items-center justify-center rounded-md text-[var(--app-muted)] transition-colors hover:bg-[var(--app-danger)] hover:text-white"
             title="关闭"
             onClick={() => void windowClose()}
           >
@@ -2988,8 +3039,8 @@ export function App() {
       ) : (
       <div className="flex min-h-0 flex-1">
         {!sidebarCollapsed ? (
-        <aside className="flex w-[348px] shrink-0 flex-col border-r border-[var(--app-border)] bg-[var(--app-panel)]">
-          <div className="space-y-1 px-2.5 py-4">
+        <aside className="relative flex w-[264px] shrink-0 flex-col border-r border-[var(--app-border)] bg-[var(--app-panel)] before:pointer-events-none before:absolute before:inset-y-0 before:right-[-1px] before:w-px before:bg-gradient-to-b before:from-transparent before:via-[color-mix(in_srgb,var(--app-text)_6%,transparent)] before:to-transparent">
+          <div className="space-y-0.5 px-2.5 pb-1 pt-3">
             {primaryNav.map((item) => {
               const Icon = item.icon
               const disabled = item.disabled
@@ -2999,12 +3050,12 @@ export function App() {
                 <button
                   key={item.id}
                   className={cn(
-                    "flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-medium transition-colors",
+                    "relative flex h-10 w-full items-center gap-3 rounded-[var(--app-radius-md)] px-3 text-left text-[13px] font-medium transition-[background-color,color] duration-150",
                     disabled
                       ? "cursor-not-allowed text-[var(--app-subtle)] opacity-45"
                       : selected
-                      ? "bg-[var(--app-selected)] text-[var(--app-text)]"
-                      : "text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
+                        ? "bg-[var(--app-selected)] text-[var(--app-text)] before:absolute before:left-0 before:top-1/2 before:h-5 before:w-[2px] before:-translate-y-1/2 before:rounded-r-full before:bg-[var(--app-accent)] before:content-['']"
+                        : "text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
                   )}
                   disabled={disabled}
                   title={disabled ? `${item.label} 暂未开放` : item.label}
@@ -3018,10 +3069,10 @@ export function App() {
                     setUtilityPanel((value) => (value === item.id ? null : item.id))
                   }}
                 >
-                  <Icon className="h-[18px] w-[18px] shrink-0" />
+                  <Icon className={cn("h-[17px] w-[17px] shrink-0", selected && "text-[var(--app-accent)]")} />
                   <span className="min-w-0 flex-1">{item.label}</span>
                   {item.shortcut ? (
-                    <span className="rounded-md border border-[var(--app-border)] bg-[var(--app-input)] px-1.5 py-0.5 font-mono text-[10px] tracking-tight text-[var(--app-subtle)]">
+                    <span className="rounded-[5px] border border-[var(--app-border)] bg-[var(--app-input)] px-1.5 py-0.5 font-mono text-[10px] tracking-tight text-[var(--app-subtle)]">
                       {item.shortcut}
                     </span>
                   ) : null}
@@ -3047,17 +3098,17 @@ export function App() {
             />
           ) : null}
 
-          <div className="flex items-center gap-1 px-4 pb-2 pt-6">
+          <div className="mx-3 mt-5 flex items-center gap-1 border-t border-[var(--app-divider)] px-1 pb-2 pt-4">
             <button
               type="button"
-              className="mr-auto inline-flex h-7 max-w-full items-center gap-1 rounded-md px-1.5 text-left text-[11px] font-semibold uppercase tracking-wider text-[var(--app-subtle)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+              className="mr-auto inline-flex h-7 max-w-full items-center gap-1 rounded-[var(--app-radius-sm)] px-1.5 text-left text-[10.5px] font-semibold uppercase tracking-[0.14em] text-[var(--app-subtle)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
               onClick={toggleProjectSection}
               title={hasExpandedProjects ? "全部收起" : canRestorePreviousProjectGroups ? "恢复之前展开的分组" : "全部展开"}
             >
               <span className="truncate">项目</span>
               <ChevronRightIcon
                 className={cn(
-                  "h-3.5 w-3.5 shrink-0 transition-transform",
+                  "h-3 w-3 shrink-0 transition-transform",
                   hasExpandedProjects && "rotate-90",
                 )}
               />
@@ -3065,7 +3116,7 @@ export function App() {
             <div ref={projectOrganizeRegionRef} className="relative">
               <button
                 className={cn(
-                  "flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
+                  "flex h-7 w-7 items-center justify-center rounded-[var(--app-radius-sm)] text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]",
                   projectOrganizeOpen && "bg-[var(--app-selected)] text-[var(--app-text)]",
                 )}
                 title="整理项目"
@@ -3089,7 +3140,7 @@ export function App() {
               ) : null}
             </div>
             <button
-              className="flex h-7 w-7 items-center justify-center rounded-md text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+              className="flex h-7 w-7 items-center justify-center rounded-[var(--app-radius-sm)] text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
               title="添加项目"
               onClick={() => pickWorkspace.mutate()}
               disabled={pickWorkspace.isPending}
@@ -3162,8 +3213,12 @@ export function App() {
                   )
                 })
               ) : (
-                <div className="rounded-lg border border-dashed border-[var(--app-border)] px-3 py-8 text-center text-sm font-medium text-[var(--app-muted)]">
-                  暂无项目，点击右上角文件夹添加。
+                <div className="app-dotgrid rounded-[var(--app-radius-md)] border border-dashed border-[var(--app-border)] px-3 py-10 text-center text-[12.5px] font-medium leading-relaxed text-[var(--app-muted)]">
+                  <div className="mb-2 inline-flex h-9 w-9 items-center justify-center rounded-full bg-[var(--app-panel-2)] text-[var(--app-subtle)]">
+                    <FolderOpenIcon className="h-4 w-4" />
+                  </div>
+                  <div>暂无项目</div>
+                  <div className="mt-0.5 text-[var(--app-subtle)]">点击右上角文件夹添加</div>
                 </div>
               )}
             </div>
@@ -3171,12 +3226,13 @@ export function App() {
 
           <div className="border-t border-[var(--app-divider)] px-2 py-2">
             <button
-              className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] font-medium text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
+              className="flex h-9 w-full items-center gap-2.5 rounded-[var(--app-radius-md)] px-2.5 text-left text-[13px] font-medium text-[var(--app-muted)] transition-[background-color,color] duration-150 hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
               title="设置"
               onClick={() => switchView("settings")}
             >
               <SettingsIcon className="h-4 w-4 shrink-0" />
               <span className="min-w-0 flex-1">设置</span>
+              <span className="rounded-[5px] border border-[var(--app-border)] bg-[var(--app-input)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--app-subtle)]">⌘,</span>
             </button>
           </div>
         </aside>
@@ -3348,7 +3404,7 @@ function GuiUpdatePrompt({
       role="dialog"
       aria-modal="false"
       aria-label="发现新版本"
-      className="fixed bottom-5 right-5 z-[120] w-[min(420px,calc(100vw-32px))] rounded-xl border border-[var(--app-border)] bg-[var(--app-panel)] p-4 shadow-2xl shadow-black/35"
+      className="fixed bottom-5 right-5 z-[120] w-[min(420px,calc(100vw-32px))] rounded-[var(--app-radius-lg)] border border-[var(--app-border)] bg-[var(--app-panel)] p-4 shadow-[var(--app-elevation-3)]"
       data-no-window-drag
     >
       <div className="flex items-start gap-3">
@@ -3429,9 +3485,9 @@ function RenameThreadDialog({
   onSubmit: () => void
 }) {
   return (
-    <div className="fixed inset-0 z-[120] grid place-items-center bg-black/35 px-4" data-no-window-drag>
+    <div className="fixed inset-0 z-[120] grid place-items-center bg-black/45 px-4 backdrop-blur-sm" data-no-window-drag>
       <form
-        className="w-full max-w-[420px] rounded-xl border border-[var(--app-border)] bg-[var(--app-panel)] p-4 shadow-2xl shadow-black/35"
+        className="w-full max-w-[420px] rounded-[var(--app-radius-lg)] border border-[var(--app-border)] bg-[var(--app-panel)] p-4 shadow-[var(--app-elevation-3)]"
         onSubmit={(event) => {
           event.preventDefault()
           onSubmit()
@@ -3524,7 +3580,7 @@ function AppMenuPanel({
 
   return (
     <div
-      className="absolute left-[102px] top-[42px] z-50 w-[236px] overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-panel)] p-1.5 shadow-xl shadow-black/30 ring-1 ring-black/5"
+      className="absolute left-[102px] top-[42px] z-50 w-[244px] overflow-hidden rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-[var(--app-panel)] p-1.5 shadow-[var(--app-elevation-3)]"
       data-no-window-drag
     >
       {menu === "file" ? (
@@ -3563,7 +3619,13 @@ function AppMenuPanel({
 
       {menu === "help" ? (
         <>
-          <div className="px-3 py-2 text-xs font-medium text-[var(--app-muted)]">
+          <div className="flex items-center gap-2 px-3 py-2 text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--app-subtle)]">
+            <span
+              className={cn(
+                "inline-block h-1.5 w-1.5 rounded-full",
+                serverHealthy ? "bg-[var(--app-success)] shadow-[0_0_6px_color-mix(in_srgb,var(--app-success)_60%,transparent)]" : "bg-[var(--app-subtle)]",
+              )}
+            />
             OpenCode {serverHealthy ? "已连接" : "未连接"}
           </div>
           <MenuAction label="打开 OpenCode 文档" onClick={() => run(onOpenHelp)} />
@@ -3590,20 +3652,24 @@ function MenuAction({
   return (
     <button
       className={cn(
-        "flex h-8 w-full items-center gap-3 rounded-md px-3 text-left text-sm font-medium text-[var(--app-text)] hover:bg-[var(--app-hover)] disabled:opacity-40 disabled:hover:bg-transparent",
+        "flex h-8 w-full items-center gap-3 rounded-[var(--app-radius-sm)] px-3 text-left text-[13px] font-medium text-[var(--app-text)] transition-[background-color,color] duration-150 hover:bg-[var(--app-hover)] disabled:opacity-40 disabled:hover:bg-transparent",
         danger && "text-[var(--app-danger)] hover:bg-[var(--app-danger-soft)]",
       )}
       disabled={disabled}
       onClick={onClick}
     >
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {shortcut ? <span className="shrink-0 text-xs text-[var(--app-subtle)]">{shortcut}</span> : null}
+      {shortcut ? (
+        <span className="shrink-0 rounded-[5px] border border-[var(--app-border)] bg-[var(--app-input)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--app-subtle)]">
+          {shortcut}
+        </span>
+      ) : null}
     </button>
   )
 }
 
 function MenuDivider() {
-  return <div className="my-1 h-px bg-[var(--app-border)]" />
+  return <div className="my-1 h-px bg-[var(--app-divider)]" />
 }
 
 type UtilityBackendSearchState = {
@@ -3820,7 +3886,7 @@ function UtilityPanelView({
           role="dialog"
           aria-modal="true"
           aria-label="搜索"
-          className="flex max-h-[82vh] w-full max-w-[720px] flex-col overflow-hidden rounded-xl border border-[var(--app-border)] bg-[var(--app-panel)] shadow-2xl shadow-black/35"
+          className="flex max-h-[82vh] w-full max-w-[720px] flex-col overflow-hidden rounded-[var(--app-radius-lg)] border border-[var(--app-border)] bg-[var(--app-panel)] shadow-[var(--app-elevation-3)]"
         >
           <div className="flex items-center gap-2 border-b border-[var(--app-divider)] p-3">
             <div className="flex h-10 min-w-0 flex-1 items-center gap-2 rounded-md border border-[var(--app-border)] bg-[var(--app-input)] px-3">
@@ -4153,7 +4219,7 @@ function ProjectOrganizeMenu({
 
   return (
     <div
-      className="absolute right-0 top-8 z-[70] w-[218px] max-w-[calc(100vw-24px)] overflow-hidden rounded-md border border-[var(--app-border)] bg-[var(--app-panel)] p-1 shadow-xl shadow-black/25"
+      className="absolute right-0 top-8 z-[70] w-[224px] max-w-[calc(100vw-24px)] overflow-hidden rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-[var(--app-panel)] p-1.5 shadow-[var(--app-elevation-3)]"
       data-no-window-drag
     >
       <div className="px-2 py-1 text-[11px] font-semibold text-[var(--app-subtle)]">整理</div>
@@ -4305,42 +4371,42 @@ function ProjectGroup({
     <section className="group/project">
       <div
         className={cn(
-          "flex h-8 items-center gap-1 rounded-md px-1 text-[13px] font-medium text-[var(--app-text)] transition-colors",
+          "flex h-8 items-center gap-1 rounded-[var(--app-radius-sm)] px-1 text-[13px] font-medium text-[var(--app-text)] transition-colors",
         )}
         onContextMenu={openContextMenu}
       >
         <button
           type="button"
-          className="flex h-6 w-5 shrink-0 items-center justify-center rounded-md text-[var(--app-muted)] hover:text-[var(--app-text)]"
+          className="flex h-6 w-5 shrink-0 items-center justify-center rounded-[var(--app-radius-sm)] text-[var(--app-subtle)] transition-colors hover:text-[var(--app-text)]"
           onClick={onToggleExpanded}
           title={expanded ? "折叠项目" : "展开项目"}
         >
-          <ChevronRightIcon className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-90")} />
+          <ChevronRightIcon className={cn("h-3 w-3 transition-transform duration-150", expanded && "rotate-90")} />
         </button>
         <button
           type="button"
           className={cn(
-            "inline-flex max-w-[calc(100%-72px)] min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-[var(--app-hover)]",
+            "inline-flex max-w-[calc(100%-72px)] min-w-0 items-center gap-2 rounded-[var(--app-radius-sm)] px-1 py-1 text-left transition-colors hover:bg-[var(--app-hover)]",
             selected && "bg-[var(--app-selected)]",
           )}
           onClick={onSelect}
           title={path ?? name}
         >
-          <FolderIcon className="h-4 w-4 shrink-0 text-[var(--app-muted)]" />
+          <FolderIcon className={cn("h-4 w-4 shrink-0", active ? "text-[var(--app-accent)]" : "text-[var(--app-muted)]")} />
           <span className="truncate">{name}</span>
         </button>
         <div className="min-w-0 flex-1" />
-        {loading ? <Loader2Icon className="h-3.5 w-3.5 animate-spin text-[var(--app-muted)]" /> : null}
+        {loading ? <Loader2Icon className="h-3.5 w-3.5 animate-spin text-[var(--app-accent)]" /> : null}
         {onCreateThread ? (
           <div
             className={cn(
-              "flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/project:opacity-100 group-focus-within/project:opacity-100",
+              "flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/project:opacity-100 group-focus-within/project:opacity-100",
               createBusy && "opacity-100",
             )}
           >
             <button
               type="button"
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] disabled:opacity-50"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--app-radius-sm)] text-[var(--app-muted)] transition-colors hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] disabled:opacity-50"
               title="在此项目新建会话"
               onClick={onCreateThread}
               disabled={createBusy || createDisabled}
@@ -4352,7 +4418,7 @@ function ProjectGroup({
       </div>
       {contextMenu ? (
         <div
-          className="fixed z-[80] w-48 overflow-hidden rounded-lg border border-[var(--app-border)] bg-[var(--app-panel)] p-1.5 text-sm shadow-2xl shadow-black/35"
+          className="fixed z-[80] w-48 overflow-hidden rounded-[var(--app-radius-md)] border border-[var(--app-border)] bg-[var(--app-panel)] p-1.5 text-sm shadow-[var(--app-elevation-3)]"
           style={{ left: menuLeft, top: menuTop }}
           data-no-window-drag
           onClick={(event) => event.stopPropagation()}

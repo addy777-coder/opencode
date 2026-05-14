@@ -1,6 +1,6 @@
 [package]
 name = "opencode-gui"
-version = "0.1.10"
+version = "0.1.11"
 description = "Codex-style OpenCode GUI"
 authors = ["OpenCode"]
 edition = "2021"

@@ -12,30 +12,32 @@
   color-scheme: dark;
 
   /* surfaces */
-  --app-bg: #0f1115;
-  --app-panel: #16181d;
-  --app-panel-2: #1b1d22;
-  --app-chrome: #14161a;
-  --app-input: #1d1f24;
-  --app-composer: #1a1c21;
-  --app-inspector: #131519;
+  --app-bg: #0c0d10;
+  --app-panel: #13151a;
+  --app-panel-2: #181a20;
+  --app-chrome: #0d0e12;
+  --app-input: #15171d;
+  --app-composer: #11141a;
+  --app-inspector: #0f1116;
 
   /* text */
-  --app-text: #f4f4f5;
-  --app-muted: rgba(244, 244, 245, 0.62);
-  --app-subtle: rgba(244, 244, 245, 0.42);
+  --app-text: #f3f5f8;
+  --app-muted: rgba(243, 245, 248, 0.58);
+  --app-subtle: rgba(243, 245, 248, 0.38);
 
   /* lines & states */
-  --app-border: rgba(255, 255, 255, 0.08);
-  --app-divider: rgba(255, 255, 255, 0.06);
-  --app-hover: rgba(255, 255, 255, 0.05);
-  --app-hover-strong: rgba(255, 255, 255, 0.10);
-  --app-selected: rgba(255, 255, 255, 0.08);
+  --app-border: rgba(255, 255, 255, 0.07);
+  --app-divider: rgba(255, 255, 255, 0.045);
+  --app-hover: rgba(255, 255, 255, 0.045);
+  --app-hover-strong: rgba(255, 255, 255, 0.085);
+  --app-selected: rgba(122, 178, 255, 0.16);
 
   /* accent */
-  --app-accent: #6aa9ff;
-  --app-accent-soft: color-mix(in srgb, #6aa9ff 18%, transparent);
-  --app-accent-contrast: #0b0d12;
+  --app-accent: #7ab2ff;
+  --app-accent-soft: rgba(122, 178, 255, 0.14);
+  --app-accent-hover: #93c1ff;
+  --app-accent-contrast: #0a0b0d;
+  --app-ring: rgba(122, 178, 255, 0.28);
 
   /* status */
   --app-success: #34d399;
@@ -43,15 +45,34 @@
   --app-danger: #ef4444;
   --app-danger-soft: rgba(239, 68, 68, 0.14);
 
+  /* code */
+  --app-code-bg: rgba(255, 255, 255, 0.035);
+  --app-dot: rgba(243, 245, 248, 0.16);
+
+  /* elevation */
+  --app-elevation-1: 0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 1px 2px rgba(0, 0, 0, 0.45), 0 4px 16px rgba(0, 0, 0, 0.25);
+  --app-elevation-2: 0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 12px 36px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.35);
+  --app-elevation-3: 0 1px 0 rgba(255, 255, 255, 0.05) inset,
+    0 28px 64px rgba(0, 0, 0, 0.55), 0 4px 10px rgba(0, 0, 0, 0.45);
+
+  /* shape */
+  --app-radius-sm: 6px;
+  --app-radius-md: 10px;
+  --app-radius-lg: 14px;
+  --app-radius-xl: 20px;
+
   /* typography */
   --app-ui-font:
-    "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", "SF Pro Text",
-    "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC",
+    "Geist", "Inter Display", "IBM Plex Sans", "Segoe UI Variable Text",
+    "Segoe UI Variable", "Segoe UI", "SF Pro Text", "PingFang SC",
+    "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans CJK SC",
     "Source Han Sans SC", ui-sans-serif, system-ui, sans-serif;
   --app-code-font:
-    "Cascadia Code", "Cascadia Mono", "JetBrains Mono", "Maple Mono NF CN",
-    "Sarasa Mono SC", ui-monospace, SFMono-Regular, Menlo, Consolas,
-    "Microsoft YaHei UI", monospace;
+    "Geist Mono", "JetBrains Mono", "IBM Plex Mono", "Cascadia Code",
+    "Cascadia Mono", "Maple Mono NF CN", "Sarasa Mono SC", ui-monospace,
+    SFMono-Regular, Menlo, Consolas, "Microsoft YaHei UI", monospace;
   --app-font-size: 14px;
   --app-prose-font-size: 14px;
   --app-code-font-size: 12.5px;
@@ -62,10 +83,15 @@
   font-synthesis: none;
   font-kerning: normal;
   font-optical-sizing: auto;
-  letter-spacing: 0;
+  font-feature-settings: "cv11" 1, "ss01" 1, "ss03" 1, "cv02" 1;
+  letter-spacing: -0.005em;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
 }
 
 * {
@@ -85,6 +111,22 @@ body {
   font-size: var(--app-font-size);
   background: var(--app-bg);
   color: var(--app-text);
+  /* Subtle atmospheric tint: a barely-visible radial wash from the top-left
+     and an accent-tinted ember in the bottom-right corner. Adds depth without
+     adding noise. Themed via the accent so dark blue tints in dark mode and
+     soft sky in light. */
+  background-image:
+    radial-gradient(
+      1100px 720px at 0% -10%,
+      color-mix(in srgb, var(--app-accent) 6%, transparent),
+      transparent 55%
+    ),
+    radial-gradient(
+      900px 600px at 105% 110%,
+      color-mix(in srgb, var(--app-accent) 5%, transparent),
+      transparent 60%
+    );
+  background-attachment: fixed;
 }
 
 /* Wrapped in :where() so specificity is 0 and Tailwind utility classes
@@ -93,6 +135,15 @@ body {
    when sitting on top of accent backgrounds. */
 :where(button, textarea, input, select) {
   font: inherit;
+  font-feature-settings: inherit;
+  letter-spacing: inherit;
+}
+
+/* Tabular numerals for anything that looks like a timestamp / count. */
+time,
+.tabular-nums,
+.font-mono {
+  font-variant-numeric: tabular-nums;
 }
 
 ::selection {
@@ -105,8 +156,11 @@ body {
 }
 
 :where(:focus-visible) {
-  outline: 2px solid var(--app-accent);
-  outline-offset: 1px;
+  outline: none;
+  box-shadow:
+    0 0 0 1px var(--app-accent),
+    0 0 0 4px var(--app-ring);
+  border-radius: inherit;
 }
 
 /* Inputs and textareas surrender focus rendering to their parent: the
@@ -116,6 +170,7 @@ body {
 :where(input, textarea, select):focus,
 :where(input, textarea, select):focus-visible {
   outline: none;
+  box-shadow: none;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -127,14 +182,15 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--app-text) 18%, transparent);
+  background: color-mix(in srgb, var(--app-text) 14%, transparent);
   border: 3px solid transparent;
   border-radius: 999px;
   background-clip: content-box;
+  transition: background-color 0.15s ease;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in srgb, var(--app-text) 32%, transparent);
+  background: color-mix(in srgb, var(--app-text) 28%, transparent);
   background-clip: content-box;
 }
 
@@ -149,7 +205,8 @@ body {
 /* Firefox */
 * {
   scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--app-text) 18%, transparent) transparent;
+  scrollbar-color: color-mix(in srgb, var(--app-text) 14%, transparent)
+    transparent;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -157,7 +214,7 @@ body {
 /* -------------------------------------------------------------------------- */
 input::placeholder,
 textarea::placeholder {
-  color: var(--app-muted);
+  color: var(--app-subtle);
   opacity: 1;
 }
 
@@ -165,16 +222,89 @@ kbd {
   font-family: var(--app-code-font);
   font-size: 0.78em;
   line-height: 1;
-  padding: 0.1em 0.45em;
-  border-radius: 4px;
+  padding: 0.18em 0.5em;
+  border-radius: 5px;
   background: var(--app-hover-strong);
   color: var(--app-text);
+  border: 1px solid var(--app-divider);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.18);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Buttons never inherit native browser focus rings — we drive them via
+   the global focus-visible token above. */
+button {
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* Hide the default focus ring on draggable window chrome */
 [data-tauri-drag-region]:focus,
 [data-tauri-drag-region]:focus-visible {
   outline: none;
+  box-shadow: none;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Helpers                                                                    */
+/* -------------------------------------------------------------------------- */
+
+/* Tiny grain texture for hero / empty-state surfaces. Inline data-URI keeps
+   it offline-friendly for the Tauri shell. */
+.app-grain {
+  position: relative;
+}
+.app-grain::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.4;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.06 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  mix-blend-mode: overlay;
+}
+
+/* Faint dot grid — for empty / hero panels that need subtle depth. */
+.app-dotgrid {
+  background-image: radial-gradient(
+    var(--app-dot) 1px,
+    transparent 1px
+  );
+  background-size: 18px 18px;
+  background-position: 0 0;
+}
+
+/* Caret pulse for "thinking" placeholders. */
+@keyframes app-caret-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.app-caret-pulse {
+  animation: app-caret-pulse 1.4s ease-in-out infinite;
+}
+
+/* Shimmer used by skeleton loaders / streaming placeholders. */
+@keyframes app-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+.app-shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--app-text) 8%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: app-shimmer 1.8s ease-in-out infinite;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -188,13 +318,13 @@ kbd {
 .md-prose {
   color: var(--app-text);
   font-size: var(--app-prose-font-size);
-  line-height: 1.68;
+  line-height: 1.72;
   word-wrap: break-word;
   overflow-wrap: break-word;
 }
 
 .md-prose > * + * {
-  margin-top: 0.85rem;
+  margin-top: 0.9rem;
 }
 
 .md-prose p {
@@ -221,8 +351,9 @@ kbd {
 .md-prose h5,
 .md-prose h6 {
   color: var(--app-text);
-  font-weight: 600;
-  line-height: 1.3;
+  font-weight: 650;
+  line-height: 1.28;
+  letter-spacing: -0.012em;
 }
 
 .md-prose h1 {
@@ -232,8 +363,8 @@ kbd {
 }
 .md-prose h2 {
   font-size: calc(var(--app-prose-font-size) + 3px);
-  margin-top: 1.4rem;
-  margin-bottom: 0.5rem;
+  margin-top: 1.5rem;
+  margin-bottom: 0.55rem;
 }
 .md-prose h3 {
   font-size: calc(var(--app-prose-font-size) + 1px);
@@ -250,6 +381,9 @@ kbd {
   font-size: calc(var(--app-prose-font-size) - 1px);
   margin-top: 0.8rem;
   margin-bottom: 0.3rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--app-muted);
 }
 .md-prose > h1:first-child,
 .md-prose > h2:first-child,
@@ -273,11 +407,11 @@ kbd {
 }
 
 .md-prose li {
-  margin: 0.2rem 0;
+  margin: 0.22rem 0;
 }
 
 .md-prose li::marker {
-  color: var(--app-muted);
+  color: var(--app-subtle);
 }
 
 .md-prose li > p {
@@ -290,10 +424,26 @@ kbd {
 }
 
 .md-prose blockquote {
-  border-left: 3px solid var(--app-border);
-  padding: 0.1rem 0 0.1rem 1rem;
+  position: relative;
+  border-left: 2px solid var(--app-accent);
+  padding: 0.05rem 0 0.05rem 1.05rem;
   color: var(--app-muted);
   margin: 0;
+  font-style: normal;
+}
+
+.md-prose blockquote::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    var(--app-accent-soft) 0%,
+    transparent 60%
+  );
+  border-radius: 0 4px 4px 0;
+  z-index: -1;
+  opacity: 0.5;
 }
 
 .md-prose blockquote > * + * {
@@ -311,10 +461,13 @@ kbd {
   text-decoration: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, var(--app-accent) 45%, transparent);
+  transition: color 0.15s ease, text-decoration-color 0.15s ease;
 }
 
 .md-prose a:hover {
-  opacity: 0.85;
+  color: var(--app-accent-hover);
+  text-decoration-color: var(--app-accent);
 }
 
 .md-prose a.md-local-file-link {
@@ -340,7 +493,7 @@ kbd {
   font-family: var(--app-code-font);
   font-size: 0.86em;
   font-variant-ligatures: none;
-  padding: 0.12em 0.4em;
+  padding: 0.14em 0.42em;
   border-radius: 5px;
   background: var(--app-code-bg);
   border: 1px solid var(--app-divider);
@@ -355,6 +508,8 @@ kbd {
   margin: 0;
   display: block;
   overflow-x: auto;
+  border: 1px solid var(--app-divider);
+  border-radius: var(--app-radius-md);
 }
 
 .md-prose thead {
@@ -363,24 +518,34 @@ kbd {
 
 .md-prose th,
 .md-prose td {
-  border: 1px solid var(--app-divider);
-  padding: 0.45rem 0.7rem;
+  border-bottom: 1px solid var(--app-divider);
+  padding: 0.5rem 0.75rem;
   text-align: left;
   vertical-align: top;
 }
 
+.md-prose tbody tr:last-child th,
+.md-prose tbody tr:last-child td {
+  border-bottom: 0;
+}
+
 .md-prose th {
   font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.78em;
+  letter-spacing: 0.05em;
+  color: var(--app-muted);
 }
 
 .md-prose img {
   max-width: 100%;
-  border-radius: 8px;
+  border-radius: var(--app-radius-md);
 }
 
 .md-prose input[type="checkbox"] {
   margin-right: 0.4rem;
   vertical-align: middle;
+  accent-color: var(--app-accent);
 }
 
 /* === Code block (pre) === */
@@ -390,9 +555,10 @@ kbd {
   margin: 0;
   padding: 0;
   border: 1px solid var(--app-divider);
-  border-radius: 12px;
+  border-radius: var(--app-radius-md);
   background: var(--app-code-bg);
   overflow: hidden;
+  box-shadow: var(--app-elevation-1);
 }
 
 .md-prose .md-code-toolbar {
@@ -400,9 +566,9 @@ kbd {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  padding: 0.4rem 0.65rem 0.4rem 0.85rem;
+  padding: 0.45rem 0.7rem 0.45rem 0.9rem;
   border-bottom: 1px solid var(--app-divider);
-  background: color-mix(in srgb, var(--app-text) 4%, transparent);
+  background: color-mix(in srgb, var(--app-text) 3%, transparent);
   font-size: 11px;
   color: var(--app-muted);
   user-select: none;
@@ -410,29 +576,32 @@ kbd {
 
 .md-prose .md-code-lang {
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.08em;
   font-weight: 600;
   font-family: var(--app-code-font);
   font-size: 10.5px;
+  color: var(--app-muted);
 }
 
 .md-prose .md-code-copy {
-  border: none;
+  border: 1px solid transparent;
   background: transparent;
   color: var(--app-muted);
   font-size: 11px;
   font-weight: 500;
-  padding: 0.2rem 0.55rem;
+  padding: 0.22rem 0.6rem;
   border-radius: 5px;
   cursor: pointer;
   transition:
-    color 0.15s,
-    background-color 0.15s;
+    color 0.15s ease,
+    background-color 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .md-prose .md-code-copy:hover {
   color: var(--app-text);
   background: var(--app-hover);
+  border-color: var(--app-divider);
 }
 
 .md-prose .md-code-copy[data-copied="1"] {
@@ -443,10 +612,10 @@ kbd {
 .md-prose pre.shiki,
 .md-prose .md-code-block .shiki {
   display: block;
-  padding: 0.85rem 1rem;
+  padding: 0.95rem 1.05rem;
   font-family: var(--app-code-font);
   font-size: var(--app-code-font-size);
-  line-height: 1.6;
+  line-height: 1.65;
   font-variant-ligatures: contextual common-ligatures;
   overflow-x: auto;
   background: transparent !important;
@@ -455,10 +624,10 @@ kbd {
 
 .md-prose pre code {
   display: block;
-  padding: 0.85rem 1rem;
+  padding: 0.95rem 1.05rem;
   font-family: var(--app-code-font);
   font-size: var(--app-code-font-size);
-  line-height: 1.6;
+  line-height: 1.65;
   font-variant-ligatures: contextual common-ligatures;
   overflow-x: auto;
 }
