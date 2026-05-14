@@ -586,20 +586,78 @@ fn local_server_args(hostname: &str, port: &str) -> Vec<String> {
 
 fn dev_source_server_command(server_args: &[String]) -> Result<Command, String> {
     let repo_root = repo_root()?;
-    let npx = if cfg!(windows) { "npx.cmd" } else { "npx" };
-    let mut args = vec![
-        "--yes".to_string(),
-        "bun@1.3.13".to_string(),
-        "--cwd".to_string(),
-        "packages/opencode".to_string(),
-        "--conditions=browser".to_string(),
-        "./src/index.ts".to_string(),
-    ];
+    let spec = dev_source_server_command_spec(server_args, command_exists_on_path(dev_bun()));
+    let mut command = Command::new(&spec.program);
+    command.current_dir(repo_root).args(spec.args);
+    Ok(command)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DevSourceServerCommandSpec {
+    program: String,
+    args: Vec<String>,
+}
+
+fn dev_source_server_command_spec(
+    server_args: &[String],
+    use_installed_bun: bool,
+) -> DevSourceServerCommandSpec {
+    let mut args = if use_installed_bun {
+        vec![
+            "--cwd".to_string(),
+            "packages/opencode".to_string(),
+            "--conditions=browser".to_string(),
+            "./src/index.ts".to_string(),
+        ]
+    } else {
+        vec![
+            "--yes".to_string(),
+            "bun@1.3.13".to_string(),
+            "--cwd".to_string(),
+            "packages/opencode".to_string(),
+            "--conditions=browser".to_string(),
+            "./src/index.ts".to_string(),
+        ]
+    };
     args.extend(server_args.iter().cloned());
 
-    let mut command = Command::new(npx);
-    command.current_dir(repo_root).args(args);
-    Ok(command)
+    DevSourceServerCommandSpec {
+        program: if use_installed_bun {
+            dev_bun()
+        } else {
+            dev_npx()
+        }
+        .to_string(),
+        args,
+    }
+}
+
+fn dev_bun() -> &'static str {
+    if cfg!(windows) {
+        "bun.exe"
+    } else {
+        "bun"
+    }
+}
+
+fn dev_npx() -> &'static str {
+    if cfg!(windows) {
+        "npx.cmd"
+    } else {
+        "npx"
+    }
+}
+
+fn command_exists_on_path(command: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths).any(|dir| {
+                fs::metadata(dir.join(command))
+                    .map(|metadata| metadata.is_file())
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
 }
 
 fn spawn_local_server(
@@ -3592,6 +3650,48 @@ mod tests {
 
         assert_eq!(hostname, "localhost");
         assert_eq!(port, "80");
+    }
+
+    #[test]
+    fn dev_source_server_prefers_installed_bun() {
+        let args = local_server_args("127.0.0.1", "4096");
+        let spec = dev_source_server_command_spec(&args, true);
+
+        assert_eq!(spec.program, dev_bun());
+        assert_eq!(
+            spec.args,
+            vec![
+                "--cwd".to_string(),
+                "packages/opencode".to_string(),
+                "--conditions=browser".to_string(),
+                "./src/index.ts".to_string(),
+                "serve".to_string(),
+                "--hostname=127.0.0.1".to_string(),
+                "--port=4096".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn dev_source_server_uses_npx_fallback_when_bun_is_missing() {
+        let args = local_server_args("127.0.0.1", "4096");
+        let spec = dev_source_server_command_spec(&args, false);
+
+        assert_eq!(spec.program, dev_npx());
+        assert_eq!(
+            spec.args,
+            vec![
+                "--yes".to_string(),
+                "bun@1.3.13".to_string(),
+                "--cwd".to_string(),
+                "packages/opencode".to_string(),
+                "--conditions=browser".to_string(),
+                "./src/index.ts".to_string(),
+                "serve".to_string(),
+                "--hostname=127.0.0.1".to_string(),
+                "--port=4096".to_string()
+            ]
+        );
     }
 
     #[test]

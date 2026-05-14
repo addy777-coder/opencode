@@ -785,7 +785,7 @@ pub async fn server_start(
             });
         }
         drop(child_guard);
-        healthy = opencode::wait_until_healthy(&base_url, 24).await;
+        healthy = opencode::wait_until_healthy(&base_url, 60).await;
     }
 
     let message = if healthy {
