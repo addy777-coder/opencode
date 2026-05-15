@@ -3311,6 +3311,11 @@ fn third_party_provider_config(provider: &ThirdPartyProviderConfig) -> Result<Va
 
     let mut models = Map::new();
     for model_id in normalized_models(provider) {
+        let input_modalities = if provider.supports_attachment {
+            json!(["text", "image", "pdf"])
+        } else {
+            json!(["text"])
+        };
         models.insert(
             model_id.clone(),
             json!({
@@ -3323,6 +3328,10 @@ fn third_party_provider_config(provider: &ThirdPartyProviderConfig) -> Result<Va
                 "limit": {
                     "context": context,
                     "output": output,
+                },
+                "modalities": {
+                    "input": input_modalities,
+                    "output": ["text"],
                 },
                 "cost": {
                     "input": 0,
@@ -3543,6 +3552,50 @@ fn request_with_directory(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_third_party_provider(supports_attachment: bool) -> ThirdPartyProviderConfig {
+        ThirdPartyProviderConfig {
+            id: "custom".to_string(),
+            name: "Custom".to_string(),
+            protocol: "openai-compatible".to_string(),
+            base_url: "https://example.com/v1".to_string(),
+            models: vec!["vision-model".to_string()],
+            default_model: Some("vision-model".to_string()),
+            headers: String::new(),
+            timeout: None,
+            chunk_timeout: None,
+            context_limit: Some(128_000),
+            output_limit: Some(16_384),
+            supports_reasoning: true,
+            supports_attachment,
+        }
+    }
+
+    #[test]
+    fn third_party_provider_config_maps_attachment_to_input_modalities() {
+        let config = third_party_provider_config(&test_third_party_provider(true))
+            .expect("provider config should build");
+
+        assert_eq!(
+            config["models"]["vision-model"]["modalities"]["input"],
+            serde_json::json!(["text", "image", "pdf"])
+        );
+        assert_eq!(
+            config["models"]["vision-model"]["modalities"]["output"],
+            serde_json::json!(["text"])
+        );
+    }
+
+    #[test]
+    fn third_party_provider_config_keeps_text_only_without_attachment_support() {
+        let config = third_party_provider_config(&test_third_party_provider(false))
+            .expect("provider config should build");
+
+        assert_eq!(
+            config["models"]["vision-model"]["modalities"]["input"],
+            serde_json::json!(["text"])
+        );
+    }
 
     #[test]
     fn pty_connect_token_accepts_server_snake_case() {

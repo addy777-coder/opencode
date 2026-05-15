@@ -1269,6 +1269,10 @@ export function ThreadWorkspace({
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const composerMenuRef = useRef<HTMLDivElement | null>(null)
+  const addMenuTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const permissionMenuTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const modelMenuTriggerRef = useRef<HTMLButtonElement | null>(null)
   const messageNodeRefs = useRef(new Map<string, HTMLDivElement>())
   const stickyBottomRef = useRef(true)
   const fileSearchRequest = useRef(0)
@@ -1279,7 +1283,11 @@ export function ThreadWorkspace({
   const guideMenuAnchorRef = useRef<HTMLDivElement>(null)
   const workspaceMenuAnchorRef = useRef<HTMLDivElement>(null)
   const restoringDraftRef = useRef(false)
-  useOutsideClick(composerRef, () => setOpenMenu(null), Boolean(openMenu))
+  useOutsideClick(
+    [composerMenuRef, addMenuTriggerRef, permissionMenuTriggerRef, modelMenuTriggerRef],
+    () => setOpenMenu(null),
+    Boolean(openMenu),
+  )
   useOutsideClick(headerMenuAnchorRef, () => setHeaderMenuOpen(false), headerMenuOpen)
   useOutsideClick(guideMenuAnchorRef, () => setGuideMenuOpen(null), Boolean(guideMenuOpen))
   useOutsideClick(workspaceMenuAnchorRef, () => setWorkspaceMenuOpen(false), workspaceMenuOpen)
@@ -1671,6 +1679,10 @@ export function ThreadWorkspace({
     const previous = previousThreadRef.current
     const current = { id: thread?.id, local: thread?.local }
     previousThreadRef.current = current
+
+    setAttachments([])
+    setAttachmentError(null)
+    setPreviewAttachment(null)
 
     const wasLocalPromotion =
       previous.local === true && current.local === false && Boolean(current.id)
@@ -2381,33 +2393,37 @@ export function ThreadWorkspace({
                   onHover={setActiveSuggestion}
                 />
                 {openMenu === "add" ? (
-                  <ComposerAddMenu
-                    planModeEnabled={planModeEnabled}
-                    planModeAvailable={planModeAvailable}
-                    onAddFiles={() => fileInputRef.current?.click()}
-                    onTogglePlanMode={togglePlanMode}
-                  />
+                  <div ref={composerMenuRef}>
+                    <ComposerAddMenu
+                      planModeEnabled={planModeEnabled}
+                      planModeAvailable={planModeAvailable}
+                      onAddFiles={() => fileInputRef.current?.click()}
+                      onTogglePlanMode={togglePlanMode}
+                    />
+                  </div>
                 ) : openMenu ? (
-                  <ComposerMenu
-                    kind={openMenu}
-                    models={models}
-                    selectedModel={selectedModel}
-                    modelProviderName={modelProviderName}
-                    favoriteModelKeys={favoriteModelKeys}
-                    hiddenModelKeys={hiddenModelKeys}
-                    selectedPermissionMode={permissionMode}
-                    permissionOptions={permissionOptions}
-                    onModelChange={(model) => {
-                      onModelChange(model)
-                      setOpenMenu(null)
-                    }}
-                    onModelFavoriteToggle={onModelFavoriteToggle}
-                    onModelVisibilityToggle={onModelVisibilityToggle}
-                    onPermissionModeChange={(mode) => {
-                      onPermissionModeChange(mode)
-                      setOpenMenu(null)
-                    }}
-                  />
+                  <div ref={composerMenuRef}>
+                    <ComposerMenu
+                      kind={openMenu}
+                      models={models}
+                      selectedModel={selectedModel}
+                      modelProviderName={modelProviderName}
+                      favoriteModelKeys={favoriteModelKeys}
+                      hiddenModelKeys={hiddenModelKeys}
+                      selectedPermissionMode={permissionMode}
+                      permissionOptions={permissionOptions}
+                      onModelChange={(model) => {
+                        onModelChange(model)
+                        setOpenMenu(null)
+                      }}
+                      onModelFavoriteToggle={onModelFavoriteToggle}
+                      onModelVisibilityToggle={onModelVisibilityToggle}
+                      onPermissionModeChange={(mode) => {
+                        onPermissionModeChange(mode)
+                        setOpenMenu(null)
+                      }}
+                    />
+                  </div>
                 ) : null}
                 {latestPendingGuide ? (
                   <div ref={guideMenuAnchorRef}>
@@ -2471,6 +2487,7 @@ export function ThreadWorkspace({
                 <div className="mt-3 flex flex-col gap-3 border-t border-[var(--app-divider)] pt-2.5 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <button
+                    ref={addMenuTriggerRef}
                     type="button"
                     className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)] disabled:opacity-50"
                     title="添加附件和插件"
@@ -2491,6 +2508,7 @@ export function ThreadWorkspace({
                     </button>
                   ) : null}
                   <button
+                    ref={permissionMenuTriggerRef}
                     className={cn(
                       "flex h-8 max-w-[220px] items-center gap-1.5 rounded-full px-2.5 text-xs font-medium hover:opacity-85",
                       selectedPermission?.tone === "danger"
@@ -2513,6 +2531,7 @@ export function ThreadWorkspace({
                   ) : null}
                   {showContextUsage ? <ContextUsageBadge usage={contextUsage} /> : null}
                   <button
+                    ref={modelMenuTriggerRef}
                     className="flex h-8 max-w-[280px] items-center gap-1 rounded-full px-2.5 text-xs font-medium text-[var(--app-muted)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text)]"
                     title={selectedModel ? `${selectedModel.providerName}/${selectedModel.name}` : "选择模型"}
                     onClick={() => setOpenMenu((value) => (value === "model" ? null : "model"))}
@@ -4036,29 +4055,40 @@ function ConversationTimeline({
   const [preview, setPreview] = useState<{ item: ThreadTimelineItem; x: number; y: number } | null>(null)
   if (!items.length) return null
 
+  function itemTop(index: number) {
+    return items.length <= 1 ? 4 : 4 + (index / (items.length - 1)) * 92
+  }
+
+  const activeIndex = Math.max(0, items.findIndex((item, index) => item.id === activeId || (!activeId && index === 0)))
+  const activeTop = itemTop(activeIndex)
+
   function showPreview(item: ThreadTimelineItem, element: HTMLElement) {
     const rect = element.getBoundingClientRect()
     const maxTop = Math.max(72, window.innerHeight - 156)
-    const previewWidth = 288
     setPreview({
       item,
-      x: Math.max(16, rect.left - previewWidth - 10),
+      x: rect.right + 10,
       y: Math.min(Math.max(64, rect.top - 16), maxTop),
     })
   }
 
   return (
-    <div className="pointer-events-none absolute bottom-44 right-4 top-8 z-20 hidden w-8 xl:block">
+    <div className="pointer-events-none absolute bottom-44 left-3 top-8 z-20 hidden w-10 xl:block">
       <div className="relative h-full w-full">
-        <div className="absolute bottom-4 left-1/2 top-4 w-px -translate-x-1/2 bg-[color-mix(in_srgb,var(--app-border)_52%,transparent)]" />
+        <div className="absolute bottom-1 left-1/2 top-1 w-5 -translate-x-1/2 rounded-full border border-[color-mix(in_srgb,var(--app-text)_10%,transparent)] bg-[color-mix(in_srgb,var(--app-panel)_72%,transparent)] shadow-[0_10px_30px_rgba(0,0,0,0.12)] backdrop-blur-sm" />
+        <div className="absolute bottom-5 left-1/2 top-5 w-px -translate-x-1/2 bg-[color-mix(in_srgb,var(--app-text)_24%,transparent)]" />
+        <div
+          className="absolute left-1/2 h-10 w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[var(--app-accent)] shadow-[0_0_0_4px_color-mix(in_srgb,var(--app-accent)_12%,transparent),0_8px_22px_color-mix(in_srgb,var(--app-accent)_28%,transparent)] transition-[top,height] duration-200 ease-out"
+          style={{ top: `${activeTop}%` }}
+        />
         {items.map((item, index) => {
           const active = item.id === activeId || (!activeId && index === 0)
-          const top = items.length <= 1 ? 4 : 4 + (index / (items.length - 1)) * 92
+          const top = itemTop(index)
           return (
             <button
               key={item.id}
               type="button"
-              className="group/timeline pointer-events-auto absolute left-1/2 flex h-7 w-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full outline-none"
+              className="group/timeline pointer-events-auto absolute left-1/2 flex h-8 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full outline-none"
               style={{ top: `${top}%` }}
               title={`${item.label}: ${item.preview}`}
               aria-label={`${item.label}: ${item.preview}`}
@@ -4070,28 +4100,36 @@ function ConversationTimeline({
             >
               <span
                 className={cn(
-                  "block h-3.5 w-3.5 rounded-full border-[3px] bg-[var(--app-bg)] transition-[border-color,box-shadow,transform] duration-150 group-hover/timeline:scale-110 group-focus-visible/timeline:scale-110",
+                  "relative flex h-5 w-5 items-center justify-center rounded-full border bg-[var(--app-bg)] transition-[border-color,box-shadow,transform,background-color] duration-150 group-hover/timeline:scale-110 group-focus-visible/timeline:scale-110",
                   active
-                    ? "border-[var(--app-accent)] shadow-[0_0_0_6px_color-mix(in_srgb,var(--app-accent)_14%,transparent),0_8px_24px_color-mix(in_srgb,var(--app-accent)_22%,transparent)]"
-                    : "border-[color-mix(in_srgb,var(--app-muted)_42%,var(--app-bg))] group-hover/timeline:border-[color-mix(in_srgb,var(--app-accent)_72%,var(--app-muted))] group-focus-visible/timeline:border-[color-mix(in_srgb,var(--app-accent)_72%,var(--app-muted))]",
+                    ? "border-[var(--app-accent)] bg-[color-mix(in_srgb,var(--app-accent)_14%,var(--app-bg))] shadow-[0_0_0_5px_color-mix(in_srgb,var(--app-accent)_16%,transparent),0_8px_24px_color-mix(in_srgb,var(--app-accent)_24%,transparent)]"
+                    : "border-[color-mix(in_srgb,var(--app-text)_24%,var(--app-bg))] shadow-[0_1px_0_color-mix(in_srgb,var(--app-text)_10%,transparent)_inset] group-hover/timeline:border-[color-mix(in_srgb,var(--app-accent)_78%,var(--app-muted))] group-hover/timeline:bg-[color-mix(in_srgb,var(--app-accent)_8%,var(--app-bg))] group-focus-visible/timeline:border-[color-mix(in_srgb,var(--app-accent)_78%,var(--app-muted))]",
                 )}
-              />
+              >
+                <span
+                  className={cn(
+                    "block rounded-full transition-[height,width,background-color] duration-150",
+                    active ? "h-2.5 w-2.5 bg-[var(--app-accent)]" : "h-1.5 w-1.5 bg-[color-mix(in_srgb,var(--app-text)_38%,transparent)] group-hover/timeline:bg-[var(--app-accent)]",
+                  )}
+                />
+              </span>
             </button>
           )
         })}
       </div>
       {preview ? (
         <div
-          className="pointer-events-none fixed z-50 w-72 rounded-md border border-[var(--app-border)] bg-[var(--app-panel)] px-3 py-2 text-left shadow-[var(--app-elevation-2)]"
+          className="pointer-events-none fixed z-50 w-80 rounded-[var(--app-radius-lg)] border border-[color-mix(in_srgb,var(--app-text)_12%,transparent)] bg-[color-mix(in_srgb,var(--app-panel)_92%,transparent)] px-3.5 py-3 text-left shadow-[var(--app-elevation-2)] backdrop-blur-xl"
           style={{ left: preview.x, top: preview.y }}
         >
-          <div className="flex items-center justify-between gap-3 text-[11px] font-semibold text-[var(--app-subtle)]">
+          <div className="absolute left-[-5px] top-7 h-2.5 w-2.5 rotate-45 border-b border-l border-[color-mix(in_srgb,var(--app-text)_12%,transparent)] bg-[color-mix(in_srgb,var(--app-panel)_92%,transparent)]" />
+          <div className="flex items-center justify-between gap-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--app-subtle)]">
             <span>{preview.item.label}</span>
             {preview.item.createdAt ? (
               <span className="tabular-nums">{formatClockTime(preview.item.createdAt)}</span>
             ) : null}
           </div>
-          <div className="mt-1 max-h-20 overflow-hidden text-[12.5px] leading-5 text-[var(--app-text)]">
+          <div className="mt-2 max-h-24 overflow-hidden text-[13px] font-medium leading-5 text-[var(--app-text)]">
             {preview.item.preview}
           </div>
         </div>
@@ -4515,7 +4553,12 @@ function SuggestionPanel({
 
 function ImagePreview({ attachment, onClose }: { attachment: PromptAttachment; onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-6" onClick={onClose}>
+    <div
+      className="pointer-events-auto fixed inset-0 z-50 grid place-items-center bg-black/70 p-6"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
       <button
         type="button"
         className="absolute right-5 top-5 flex h-9 w-9 items-center justify-center rounded-full bg-black/40 text-white hover:bg-black/60"
