@@ -6,7 +6,6 @@ import {
   type ComponentType,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
-  type SetStateAction,
   type SVGProps,
 } from "react"
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query"
@@ -953,7 +952,7 @@ export function App() {
   const [projectSortMode, setProjectSortMode] = useState<ProjectSortMode>("recent")
   const [projectOrganizeOpen, setProjectOrganizeOpen] = useState(false)
   const [utilityPanel, setUtilityPanel] = useState<UtilityPanel | null>(null)
-  const [composerDrafts, setComposerDrafts] = useState<Record<string, string>>({})
+  const composerDraftsRef = useRef<Record<string, string>>({})
   useEffect(() => {
     if (utilityPanel === "plugins") setUtilityPanel(null)
   }, [utilityPanel])
@@ -974,6 +973,7 @@ export function App() {
   const thirdPartyApplySignature = useRef<string | null>(null)
   const permissionSettingsMigrationRef = useRef<string | null>(null)
   const deepLinkSignatureRef = useRef<string | null>(null)
+  const activeComposerDraftKeyRef = useRef<string | null>(null)
   const renamedTitleSignature = useRef(new Set<string>())
   const sessionStatusSignature = useRef<string | null>(null)
   const startupUpdateCheckSignature = useRef<string | null>(null)
@@ -1190,27 +1190,21 @@ export function App() {
       ? `local:${workspace?.path ?? ""}`
       : `session:${activeThread.id}`
     : null
-  const activeComposerDraft = activeComposerDraftKey ? composerDrafts[activeComposerDraftKey] ?? "" : ""
+  activeComposerDraftKeyRef.current = activeComposerDraftKey
+  const activeComposerDraft = activeComposerDraftKey ? composerDraftsRef.current[activeComposerDraftKey] ?? "" : ""
   const activeActivities = useMemo(() => {
     if (!activeThread || activeThread.local) return []
     return liveActivities.filter((activity) => activity.sessionId === activeThread.id && isConversationActivity(activity))
   }, [activeThread, liveActivities])
 
-  function setActiveComposerDraft(action: SetStateAction<string>) {
+  function setActiveComposerDraft(value: string) {
+    const activeComposerDraftKey = activeComposerDraftKeyRef.current
     if (!activeComposerDraftKey) return
-    const key = activeComposerDraftKey
-    setComposerDrafts((current) => {
-      const currentValue = current[key] ?? ""
-      const nextValue = typeof action === "function" ? action(currentValue) : action
-      if (!nextValue) {
-        if (!(key in current)) return current
-        const next = { ...current }
-        delete next[key]
-        return next
-      }
-      if (currentValue === nextValue) return current
-      return { ...current, [key]: nextValue }
-    })
+    if (value) {
+      composerDraftsRef.current[activeComposerDraftKey] = value
+      return
+    }
+    delete composerDraftsRef.current[activeComposerDraftKey]
   }
 
   const pendingPermissions = useQuery({
@@ -3069,7 +3063,7 @@ export function App() {
             {primaryNav.map((item) => {
               const Icon = item.icon
               const disabled = item.disabled
-              const selected = !disabled && (item.id === "new" ? !utilityPanel && Boolean(activeThread?.local) : utilityPanel === item.id)
+              const selected = !disabled && (item.id === "new" ? !utilityPanel : utilityPanel === item.id)
 
               return (
                 <button
@@ -3309,8 +3303,9 @@ export function App() {
               permissionMode={activePermissionMode}
               permissionOptions={permissionOptions}
               error={workbenchError}
+              composerDraftKey={activeComposerDraftKey}
               composerDraft={activeComposerDraft}
-              setComposerDraft={setActiveComposerDraft}
+              onComposerDraftChange={setActiveComposerDraft}
               onSend={(text, attachments) => submitPrompt.mutateAsync({ text, attachments })}
               onAbort={() => abortThread.mutateAsync()}
               onPickWorkspace={() => pickWorkspaceForNewThread.mutate()}

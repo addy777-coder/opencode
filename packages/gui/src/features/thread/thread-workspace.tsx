@@ -6,12 +6,10 @@ import {
   useState,
   type ClipboardEvent,
   type ComponentType,
-  type Dispatch,
   type DragEvent,
   type KeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
-  type SetStateAction,
   type SVGProps,
 } from "react"
 import {
@@ -173,8 +171,9 @@ type Props = {
   permissionMode?: string
   permissionOptions?: PermissionComposerOption[]
   error?: unknown
+  composerDraftKey?: string | null
   composerDraft?: string
-  setComposerDraft?: Dispatch<SetStateAction<string>>
+  onComposerDraftChange?: (value: string) => void
   onSend: (text: string, attachments: PromptAttachment[]) => Promise<unknown>
   onAbort: () => Promise<unknown>
   onPickWorkspace?: () => void
@@ -1222,8 +1221,9 @@ export function ThreadWorkspace({
   permissionMode,
   permissionOptions = [],
   error,
+  composerDraftKey,
   composerDraft,
-  setComposerDraft,
+  onComposerDraftChange,
   onSend,
   onAbort,
   onPickWorkspace,
@@ -1241,9 +1241,7 @@ export function ThreadWorkspace({
   onQuestionReply,
   onQuestionReject,
 }: Props) {
-  const [localComposerDraft, setLocalComposerDraft] = useState("")
-  const draft = composerDraft ?? localComposerDraft
-  const setDraft = setComposerDraft ?? setLocalComposerDraft
+  const [draft, setDraft] = useState(composerDraft ?? "")
   const [attachments, setAttachments] = useState<PromptAttachment[]>([])
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [replyingId, setReplyingId] = useState<string | null>(null)
@@ -1280,6 +1278,7 @@ export function ThreadWorkspace({
   const headerMenuAnchorRef = useRef<HTMLDivElement>(null)
   const guideMenuAnchorRef = useRef<HTMLDivElement>(null)
   const workspaceMenuAnchorRef = useRef<HTMLDivElement>(null)
+  const restoringDraftRef = useRef(false)
   useOutsideClick(composerRef, () => setOpenMenu(null), Boolean(openMenu))
   useOutsideClick(headerMenuAnchorRef, () => setHeaderMenuOpen(false), headerMenuOpen)
   useOutsideClick(guideMenuAnchorRef, () => setGuideMenuOpen(null), Boolean(guideMenuOpen))
@@ -1636,6 +1635,22 @@ export function ThreadWorkspace({
   }, [emptyState])
 
   useEffect(() => {
+    restoringDraftRef.current = true
+    setDraft(composerDraft ?? "")
+    setTrigger(null)
+    setSuggestions([])
+    setActiveSuggestion(0)
+  }, [composerDraftKey])
+
+  useEffect(() => {
+    if (restoringDraftRef.current) {
+      if (draft !== (composerDraft ?? "")) return
+      restoringDraftRef.current = false
+    }
+    onComposerDraftChange?.(draft)
+  }, [composerDraft, composerDraftKey, draft, onComposerDraftChange])
+
+  useEffect(() => {
     const textarea = textareaRef.current
     if (!textarea) return
     textarea.style.height = "auto"
@@ -1805,7 +1820,7 @@ export function ThreadWorkspace({
       const info = parsePromptTrigger(next, caret)
       setTrigger(info)
       if (info) void refreshSuggestions(info)
-      else setSuggestions([])
+      else setSuggestions((current) => (current.length ? [] : current))
     },
     [refreshSuggestions],
   )
@@ -2441,7 +2456,10 @@ export function ThreadWorkspace({
                     setDraft(value)
                     updateTrigger(value, event.target.selectionStart ?? value.length)
                   }}
-                  onKeyUp={(event) => updateTrigger(event.currentTarget.value, event.currentTarget.selectionStart ?? 0)}
+                  onKeyUp={(event) => {
+                    if (!["ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"].includes(event.key)) return
+                    updateTrigger(event.currentTarget.value, event.currentTarget.selectionStart ?? 0)
+                  }}
                   onClick={(event) => updateTrigger(event.currentTarget.value, event.currentTarget.selectionStart ?? 0)}
                   onBlur={() => window.setTimeout(() => setTrigger(null), 100)}
                   onPaste={handlePaste}
@@ -4021,15 +4039,16 @@ function ConversationTimeline({
   function showPreview(item: ThreadTimelineItem, element: HTMLElement) {
     const rect = element.getBoundingClientRect()
     const maxTop = Math.max(72, window.innerHeight - 156)
+    const previewWidth = 288
     setPreview({
       item,
-      x: rect.right + 10,
+      x: Math.max(16, rect.left - previewWidth - 10),
       y: Math.min(Math.max(64, rect.top - 16), maxTop),
     })
   }
 
   return (
-    <div className="pointer-events-none absolute bottom-44 left-4 top-8 z-20 hidden w-8 xl:block">
+    <div className="pointer-events-none absolute bottom-44 right-4 top-8 z-20 hidden w-8 xl:block">
       <div className="relative h-full w-full">
         <div className="absolute bottom-4 left-1/2 top-4 w-px -translate-x-1/2 bg-[color-mix(in_srgb,var(--app-border)_52%,transparent)]" />
         {items.map((item, index) => {
@@ -6340,12 +6359,12 @@ function FloatingProgressWindow({
       const width = window.innerWidth || document.documentElement.clientWidth
       if (!width) return
 
-      const ratio = event.clientX / width
-      const nextZone = ratio >= 0.9 ? "panel" : ratio >= 0.7 ? "strip" : "outside"
+      const distanceFromRight = width - event.clientX
+      const nextZone = distanceFromRight <= 18 ? "panel" : distanceFromRight <= 36 ? "strip" : "outside"
       setCursorZone((current) => (current === nextZone ? current : nextZone))
       setPanelLatched((current) => {
-        if (ratio >= 0.9) return true
-        if (ratio < 0.7 && !floatingHovered) return false
+        if (distanceFromRight <= 18) return true
+        if (distanceFromRight > 36 && !floatingHovered) return false
         return current
       })
     }
@@ -6400,7 +6419,7 @@ function FloatingProgressWindow({
       <div className="absolute right-0 top-0 h-full w-full pointer-events-none">
         <div
           className={cn(
-            "pointer-events-auto absolute right-0 top-1/2 h-40 w-16 -translate-y-1/2 transition-opacity duration-150",
+            "pointer-events-auto absolute right-0 top-1/2 h-40 w-3 -translate-y-1/2 transition-opacity duration-150",
             showStrip ? "opacity-100" : "pointer-events-none opacity-0",
             pinned && "hidden",
           )}
